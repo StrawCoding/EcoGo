@@ -44,7 +44,7 @@ python3 -m http.server 8080
 
 ### 更新 Ionex 站點快取
 
-地圖站點來自 Ionex 公開 location API（與 [map.ionex.com.tw](https://map.ionex.com.tw/) 同源）。定期執行：
+地圖站點來自 Ionex 公開 location API（與 [map.ionex.com.tw](https://map.ionex.com.tw/) 同源）。只同步 **營運中（opened）** 換電站，關閉站／非站點類型會排除。定期執行：
 
 ```bash
 python3 scripts/sync_ionex_stations.py

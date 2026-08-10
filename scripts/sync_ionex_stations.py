@@ -2,6 +2,7 @@
 """Pre-fetch Ionex swap stations from the same API used by map.ionex.com.tw.
 
 Writes a slim EcoGo cache JSON (no API key). Intended for cron / manual sync.
+Only keeps type=station with operating_status=opened and valid TW coordinates.
 """
 from __future__ import annotations
 
@@ -14,6 +15,9 @@ from pathlib import Path
 
 API_URL = "https://api.ionex.com.tw/location"
 UA = "EcoGoStationSync/1.0 (+https://ecogo.wastebase.xyz/; cache sync)"
+# Taiwan-ish bbox with margin
+TW_LAT = (21.5, 25.6)
+TW_LON = (118.0, 122.5)
 
 
 def fetch_locations() -> dict:
@@ -30,36 +34,53 @@ def fetch_locations() -> dict:
     with urllib.request.urlopen(req, timeout=90) as resp:
         payload = json.load(resp)
     if not isinstance(payload, dict) or payload.get("status") != 200:
-        raise RuntimeError(f"unexpected Ionex API response: status={payload.get('status') if isinstance(payload, dict) else type(payload)}")
+        raise RuntimeError(
+            f"unexpected Ionex API response: status={payload.get('status') if isinstance(payload, dict) else type(payload)}"
+        )
     return payload
 
 
-def to_ecogo_stations(payload: dict) -> list[dict]:
+def to_ecogo_stations(payload: dict) -> tuple[list[dict], dict]:
     stations: list[dict] = []
+    skipped = {"not_station": 0, "closed": 0, "bad_coord": 0, "outside_tw": 0}
     for item in payload.get("data") or []:
         if item.get("type") != "station":
+            skipped["not_station"] += 1
+            continue
+        op = str(item.get("operating_status") or "").lower()
+        if op and op != "opened":
+            skipped["closed"] += 1
             continue
         try:
             lat = float(item.get("lat"))
             lon = float(item.get("lng"))
         except (TypeError, ValueError):
+            skipped["bad_coord"] += 1
             continue
-        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180) or (abs(lat) < 1e-6 and abs(lon) < 1e-6):
+            skipped["bad_coord"] += 1
             continue
-        if abs(lat) < 1e-6 and abs(lon) < 1e-6:
+        if not (TW_LAT[0] <= lat <= TW_LAT[1] and TW_LON[0] <= lon <= TW_LON[1]):
+            skipped["outside_tw"] += 1
             continue
         sid = item.get("id")
+        city = str(item.get("city") or "")
+        district = str(item.get("district") or "")
+        address = str(item.get("address") or "")
+        full_address = "".join(x for x in (city, district, address) if x)
         stations.append(
             {
                 "id": f"ionex-{sid}",
+                "sourceId": sid,
                 "name": str(item.get("name") or f"Ionex {sid}"),
                 "type": "ionex",
                 "lat": round(lat, 7),
                 "lon": round(lon, 7),
-                "city": item.get("city") or "",
-                "district": item.get("district") or "",
-                "address": item.get("address") or "",
-                "operating_status": item.get("operating_status") or "",
+                "city": city,
+                "district": district,
+                "address": address,
+                "fullAddress": full_address,
+                "operating_status": "opened",
                 "unique_key": item.get("unique_key") or "",
             }
         )
@@ -72,7 +93,7 @@ def to_ecogo_stations(payload: dict) -> list[dict]:
             continue
         seen.add(key)
         uniq.append(s)
-    return uniq
+    return uniq, skipped
 
 
 def main() -> int:
@@ -100,15 +121,16 @@ def main() -> int:
             deploy = candidate
 
     payload = fetch_locations()
-    stations = to_ecogo_stations(payload)
-    if len(stations) < 100:
-        raise RuntimeError(f"too few stations: {len(stations)}")
+    stations, skipped = to_ecogo_stations(payload)
+    if len(stations) < 1000:
+        raise RuntimeError(f"too few opened Ionex stations: {len(stations)}")
 
     out = {
         "source": API_URL,
         "via": "https://map.ionex.com.tw/",
         "fetchedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "count": len(stations),
+        "skipped": skipped,
         "stations": stations,
     }
     text = json.dumps(out, ensure_ascii=False, separators=(",", ":"))
@@ -123,6 +145,7 @@ def main() -> int:
             {
                 "ok": True,
                 "count": len(stations),
+                "skipped": skipped,
                 "output": str(args.output),
                 "deploy": str(deploy) if deploy else None,
                 "bytes": len(text.encode("utf-8")),

@@ -531,7 +531,7 @@
             </select>
           </label>
         </div>
-        <p class="note">預設使用 map.ionex.com.tw 同源 API 預抓快取（約兩千站）。例：Ionex 設 40 → 沿路線約每 40km 選最近站，再組成 Maps 導航連結。Gogoro／加油站仍可用 OSM 或示範站補。</p>
+        <p class="note">Ionex 固定使用 map.ionex.com.tw 同源官方站點（僅營運中），不會用示範點冒充。Gogoro／加油站仍可用 OSM 或示範站補。</p>
       </section>
 
       <div class="actions">
@@ -1710,13 +1710,13 @@
       return null;
     }
 
-    function buildDemoStations(latlngs, cum, totalKm) {
+    function buildDemoStations(latlngs, cum, totalKm, types = null) {
       const stations = [];
       const specs = [
         { type: "ionex", every: 18, offset: 8 },
         { type: "gogoro", every: 14, offset: 5 },
         { type: "gas", every: 28, offset: 12 },
-      ];
+      ].filter((spec) => !types || types.includes(spec.type));
       specs.forEach((spec) => {
         for (let d = spec.offset; d < totalKm - 3; d += spec.every) {
           const base = pointAtDistance(latlngs, cum, d);
@@ -1728,6 +1728,7 @@
             type: spec.type,
             lat: base.lat + jitter * 0.004,
             lon: base.lon + ((d * 13) % 5 - 2) * 0.004,
+            demo: true,
           });
         }
       });
@@ -1744,19 +1745,34 @@
           const data = await res.json();
           const list = Array.isArray(data?.stations) ? data.stations : [];
           const stations = list
-            .map((s) => ({
-              id: String(s.id || ""),
-              name: String(s.name || "Ionex"),
-              type: "ionex",
-              lat: +s.lat,
-              lon: +s.lon,
-            }))
-            .filter((s) => s.id && Number.isFinite(s.lat) && Number.isFinite(s.lon));
-          if (stations.length < 50) throw new Error("ionex cache too small");
+            .map((s) => {
+              const op = String(s.operating_status || "opened").toLowerCase();
+              if (op && op !== "opened") return null;
+              const id = String(s.id || "");
+              if (!id.startsWith("ionex-")) return null;
+              const lat = +s.lat;
+              const lon = +s.lon;
+              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+              if (lat < 21.5 || lat > 25.6 || lon < 118 || lon > 122.5) return null;
+              return {
+                id,
+                name: String(s.name || "Ionex"),
+                type: "ionex",
+                lat,
+                lon,
+                address: String(s.fullAddress || s.address || ""),
+                city: String(s.city || ""),
+                operating_status: "opened",
+                official: true,
+              };
+            })
+            .filter(Boolean);
+          if (stations.length < 1000) throw new Error(`ionex cache too small (${stations.length})`);
           return {
             stations,
             fetchedAt: data.fetchedAt || "",
             count: stations.length,
+            source: data.source || "https://api.ionex.com.tw/location",
           };
         })().catch((err) => {
           ionexCachePromise = null;
@@ -1786,37 +1802,69 @@ out center 400;
     async function fetchStationsAlongRoute(latlngs, cum, corridorKm) {
       const mode = $("dataMode").value;
       const totalKm = cum[cum.length - 1];
+      const wantIonex = $("use-ionex").checked;
+      const wantGogoro = $("use-gogoro").checked;
+      const wantGas = $("use-gas").checked;
 
       if (mode === "demo") {
-        return { stations: buildDemoStations(latlngs, cum, totalKm), mode: "demo" };
+        return {
+          stations: buildDemoStations(latlngs, cum, totalKm),
+          mode: "demo",
+        };
       }
 
-      if (mode === "osm") {
-        const stations = await fetchOsmStations(latlngs, corridorKm);
-        if (stations.length >= 3) return { stations, mode: "osm" };
-        return { stations: buildDemoStations(latlngs, cum, totalKm), mode: "demo" };
-      }
-
-      // default / ionex: official map pre-fetch for Ionex; OSM/demo for other types
+      // Ionex 必須用官方地圖同源快取，禁止 OSM／示範點冒充
       let ionexStations = [];
       let ionexMeta = "";
-      try {
+      if (wantIonex) {
         const cache = await loadIonexCache();
         ionexStations = cache.stations;
-        ionexMeta = cache.fetchedAt ? ` · ${cache.fetchedAt}` : "";
-      } catch (_) {}
+        ionexMeta = `${cache.count}站 · ${cache.fetchedAt || "cache"}`;
+      }
 
       let extra = [];
-      try {
-        extra = await fetchOsmStations(latlngs, corridorKm);
-      } catch (_) {}
-      const nonIonex = extra.filter((s) => s.type !== "ionex");
-      const stations = [...ionexStations, ...nonIonex];
-      if (ionexStations.length >= 50) {
-        return { stations, mode: `ionex-cache${ionexMeta}` };
+      if (mode === "osm" || wantGogoro || wantGas) {
+        try {
+          extra = await fetchOsmStations(latlngs, corridorKm);
+        } catch (_) {
+          extra = [];
+        }
       }
-      if (extra.length >= 3) return { stations: extra, mode: "osm" };
-      return { stations: buildDemoStations(latlngs, cum, totalKm), mode: "demo" };
+
+      // 丟掉 OSM 裡不穩的 ionex 分類，改以官方快取為準
+      const nonIonexOsm = extra.filter((s) => s.type !== "ionex");
+      let stations = [...ionexStations, ...nonIonexOsm];
+
+      if (mode === "osm") {
+        const missing = [];
+        if (wantGogoro && !nonIonexOsm.some((s) => s.type === "gogoro")) missing.push("gogoro");
+        if (wantGas && !nonIonexOsm.some((s) => s.type === "gas")) missing.push("gas");
+        if (missing.length) {
+          stations = [
+            ...stations,
+            ...buildDemoStations(latlngs, cum, totalKm, missing),
+          ];
+        }
+        return {
+          stations,
+          mode: wantIonex ? `ionex-official+osm · ${ionexMeta}` : "osm",
+        };
+      }
+
+      // ionex 官方模式
+      if (wantIonex && ionexStations.length < 1000) {
+        throw new Error("Ionex 官方站點快取異常，已停止以免使用錯誤示範點");
+      }
+      const missing = [];
+      if (wantGogoro && !stations.some((s) => s.type === "gogoro")) missing.push("gogoro");
+      if (wantGas && !stations.some((s) => s.type === "gas")) missing.push("gas");
+      if (missing.length) {
+        stations = [...stations, ...buildDemoStations(latlngs, cum, totalKm, missing)];
+      }
+      return {
+        stations,
+        mode: wantIonex ? `ionex-official · ${ionexMeta}` : missing.length ? "demo-partial" : "none",
+      };
     }
 
     function projectStations(stations, latlngs, cum) {
@@ -1986,10 +2034,18 @@ out center 400;
       };
       addItem(`起點 · ${start.name}`);
       stops.forEach((s, i) => {
-        addItem(
-          `${i + 1}. ${typeLabel(s.type)} · ${s.name}`,
-          `沿線約 ${formatKm(s.alongKm)} · 離路線 ${s.distToRouteKm.toFixed(2)} km`
-        );
+        const official =
+          s.type === "ionex" && s.official && String(s.id || "").startsWith("ionex-")
+            ? "官方站"
+            : s.demo
+              ? "示範站"
+              : "";
+        const extraBits = [
+          `沿線約 ${formatKm(s.alongKm)} · 離路線 ${s.distToRouteKm.toFixed(2)} km`,
+          official,
+          s.address || "",
+        ].filter(Boolean);
+        addItem(`${i + 1}. ${typeLabel(s.type)} · ${s.name}`, extraBits.join(" · "));
       });
       addItem(`終點 · ${end.name}`);
 
@@ -2116,6 +2172,15 @@ out center 400;
 
         const options = candidates.map((baseRoute, idx) => {
           const stops = pickStopsForRoute(baseRoute, stations, configs, corridor, dataMode);
+          // 防呆：勾選 Ionex 時禁止 demo ionex 混入
+          if ($("use-ionex").checked) {
+            const bad = stops.filter(
+              (s) => s.type === "ionex" && (!String(s.id || "").startsWith("ionex-") || s.demo)
+            );
+            if (bad.length) {
+              throw new Error("偵測到非官方 Ionex 站點，已中止以免導航到錯誤位置");
+            }
+          }
           return {
             id: idx,
             label: `路線 ${idx + 1}`,
