@@ -1430,16 +1430,21 @@
       const usesTw7 = streetNames.some((n) => /台\s*7|北橫/.test(String(n)));
       const noHwy = !trip.summary?.has_highway;
       const scenic = !!meta.preferScenic;
+      const durationSecFinal = trip.summary?.time || durationSec;
       return {
         latlngs,
         distanceKm: trip.summary?.length || distanceKm,
-        durationSec: trip.summary?.time || durationSec,
+        durationSec: durationSecFinal,
         engine: `valhalla:${costing}`,
         hasHighway: !!trip.summary?.has_highway,
         streetNames: [...new Set(streetNames)].slice(0, 40),
         labelHint:
           meta.labelHint ||
-          (scenic && usesTw7 && noHwy ? "北橫／台7" : scenic && noHwy ? "避開國道" : ""),
+          (scenic && usesTw7 && noHwy && durationSecFinal >= 140 * 60
+            ? "北橫／台7"
+            : scenic && noHwy
+              ? "避開國道"
+              : ""),
         preferScenic: scenic || (usesTw7 && noHwy),
       };
     }
