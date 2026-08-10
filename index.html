@@ -1429,6 +1429,7 @@
       });
       const usesTw7 = streetNames.some((n) => /台\s*7|北橫/.test(String(n)));
       const noHwy = !trip.summary?.has_highway;
+      const scenic = !!meta.preferScenic;
       return {
         latlngs,
         distanceKm: trip.summary?.length || distanceKm,
@@ -1436,9 +1437,10 @@
         engine: `valhalla:${costing}`,
         hasHighway: !!trip.summary?.has_highway,
         streetNames: [...new Set(streetNames)].slice(0, 40),
-        // 僅在非國道路線才標北橫，避免國道線擦到宜蘭台7市區段被誤標
-        labelHint: meta.labelHint || (usesTw7 && noHwy ? "北橫／台7" : ""),
-        preferScenic: !!meta.preferScenic || (usesTw7 && noHwy),
+        labelHint:
+          meta.labelHint ||
+          (scenic && usesTw7 && noHwy ? "北橫／台7" : scenic && noHwy ? "避開國道" : ""),
+        preferScenic: scenic || (usesTw7 && noHwy),
       };
     }
 
