@@ -531,7 +531,7 @@
             </select>
           </label>
         </div>
-        <p class="note">Ionex 固定使用 map.ionex.com.tw 同源官方站點（僅營運中），不會用示範點冒充。Gogoro／加油站仍可用 OSM 或示範站補。</p>
+        <p class="note">Ionex 規劃時優先打 <code>api.ionex.com.tw</code> 即時站點（與 map.ionex.com.tw 同源），失敗才用本地快取；只收營運中站。點行程「驗證座標」可對照 Google／官方座標。</p>
       </section>
 
       <div class="actions">
@@ -1735,45 +1735,113 @@
       return stations;
     }
 
+    const IONEX_API_URL = "https://api.ionex.com.tw/location";
     let ionexCachePromise = null;
+
+    function normalizeIonexStation(raw) {
+      const type = String(raw?.type || "station");
+      if (type !== "station") return null;
+      const op = String(raw.operating_status || "").toLowerCase();
+      if (op && op !== "opened") return null;
+      if (String(raw.gmap_open_status || "").toUpperCase() === "CLOSED_PERMANENTLY") return null;
+      if (String(raw.station_spec || "").toLowerCase() === "down") return null;
+      const lat = +raw.lat;
+      const lon = +(raw.lon ?? raw.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+      if (lat < 21.5 || lat > 26.5 || lon < 118 || lon > 122.5) return null;
+      const sid = raw.sourceId ?? raw.id;
+      const idNum = String(sid).replace(/^ionex-/, "");
+      if (!idNum || idNum === "undefined" || idNum === "null") return null;
+      const city = String(raw.city || "");
+      const district = String(raw.district || "");
+      const address = String(raw.address || "");
+      const fullAddress = String(raw.fullAddress || `${city}${district}${address}`);
+      const name = String(raw.gmap_name || raw.name || `Ionex ${idNum}`).replace(/^光陽Ionex換電站-/, "");
+      return {
+        id: `ionex-${idNum}`,
+        sourceId: idNum,
+        name,
+        type: "ionex",
+        lat,
+        lon,
+        address: fullAddress,
+        city,
+        district,
+        operating_status: "opened",
+        gmapUrl:
+          String(raw.gmap_url || "") ||
+          `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`,
+        official: true,
+      };
+    }
+
+    async function fetchIonexLive(timeoutMs = 10000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(IONEX_API_URL, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            Origin: "https://map.ionex.com.tw",
+            Referer: "https://map.ionex.com.tw/",
+          },
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error(`Ionex API HTTP ${res.status}`);
+        const data = await res.json();
+        if (data?.status != null && Number(data.status) !== 200) {
+          throw new Error("Ionex API status not OK");
+        }
+        const list = Array.isArray(data?.data) ? data.data : [];
+        const stations = list.map(normalizeIonexStation).filter(Boolean);
+        // de-dupe
+        const seen = new Set();
+        const uniq = [];
+        stations.forEach((s) => {
+          if (seen.has(s.id)) return;
+          seen.add(s.id);
+          uniq.push(s);
+        });
+        if (uniq.length < 1000) throw new Error(`Ionex live too small (${uniq.length})`);
+        return {
+          stations: uniq,
+          fetchedAt: new Date().toISOString(),
+          count: uniq.length,
+          source: IONEX_API_URL,
+          live: true,
+        };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function fetchIonexStatic() {
+      const res = await fetch(`stations-ionex.json?t=${Date.now()}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`ionex cache HTTP ${res.status}`);
+      const data = await res.json();
+      const list = Array.isArray(data?.stations) ? data.stations : [];
+      const stations = list.map(normalizeIonexStation).filter(Boolean);
+      if (stations.length < 1000) throw new Error(`ionex cache too small (${stations.length})`);
+      return {
+        stations,
+        fetchedAt: data.fetchedAt || "",
+        count: stations.length,
+        source: data.source || IONEX_API_URL,
+        live: false,
+      };
+    }
 
     async function loadIonexCache() {
       if (!ionexCachePromise) {
         ionexCachePromise = (async () => {
-          const res = await fetch(`stations-ionex.json?t=${Date.now()}`, { cache: "no-store" });
-          if (!res.ok) throw new Error(`ionex cache HTTP ${res.status}`);
-          const data = await res.json();
-          const list = Array.isArray(data?.stations) ? data.stations : [];
-          const stations = list
-            .map((s) => {
-              const op = String(s.operating_status || "opened").toLowerCase();
-              if (op && op !== "opened") return null;
-              const id = String(s.id || "");
-              if (!id.startsWith("ionex-")) return null;
-              const lat = +s.lat;
-              const lon = +s.lon;
-              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-              if (lat < 21.5 || lat > 25.6 || lon < 118 || lon > 122.5) return null;
-              return {
-                id,
-                name: String(s.name || "Ionex"),
-                type: "ionex",
-                lat,
-                lon,
-                address: String(s.fullAddress || s.address || ""),
-                city: String(s.city || ""),
-                operating_status: "opened",
-                official: true,
-              };
-            })
-            .filter(Boolean);
-          if (stations.length < 1000) throw new Error(`ionex cache too small (${stations.length})`);
-          return {
-            stations,
-            fetchedAt: data.fetchedAt || "",
-            count: stations.length,
-            source: data.source || "https://api.ionex.com.tw/location",
-          };
+          try {
+            return await fetchIonexLive();
+          } catch (err) {
+            console.warn("Ionex live fetch failed, fallback static cache", err);
+            return await fetchIonexStatic();
+          }
         })().catch((err) => {
           ionexCachePromise = null;
           throw err;
@@ -1819,7 +1887,7 @@ out center 400;
       if (wantIonex) {
         const cache = await loadIonexCache();
         ionexStations = cache.stations;
-        ionexMeta = `${cache.count}站 · ${cache.fetchedAt || "cache"}`;
+        ionexMeta = `${cache.count}站 · ${cache.live ? "即時API" : "快取"} · ${cache.fetchedAt || ""}`;
       }
 
       let extra = [];
@@ -1897,6 +1965,7 @@ out center 400;
     }
 
     function pickIntervalStops(projected, type, intervalKm, corridorKm, totalKm) {
+      const distWeight = type === "ionex" ? 1.35 : 0.35;
       const pool = projected
         .filter((s) => s.type === type && s.distToRouteKm <= corridorKm)
         .sort((a, b) => a.alongKm - b.alongKm);
@@ -1907,12 +1976,21 @@ out center 400;
       const picked = [];
       const used = new Set();
       targets.forEach((t) => {
+        // Ionex：先在更窄廊道找，找不到再放寬，避免選到離路線很遠的「名義最近站」
+        const bands =
+          type === "ionex"
+            ? [Math.min(corridorKm, 0.6), Math.min(corridorKm, 1.2), corridorKm]
+            : [corridorKm];
         let best = null;
-        pool.forEach((s) => {
-          if (used.has(s.id)) return;
-          const score = Math.abs(s.alongKm - t) + s.distToRouteKm * 0.35;
-          if (!best || score < best.score) best = { s, score };
-        });
+        for (const band of bands) {
+          pool.forEach((s) => {
+            if (used.has(s.id)) return;
+            if (s.distToRouteKm > band) return;
+            const score = Math.abs(s.alongKm - t) + s.distToRouteKm * distWeight;
+            if (!best || score < best.score) best = { s, score };
+          });
+          if (best) break;
+        }
         if (best && Math.abs(best.s.alongKm - t) <= intervalKm * 0.55) {
           used.add(best.s.id);
           picked.push(best.s);
@@ -2041,18 +2119,26 @@ out center 400;
       };
       addItem(`起點 · ${start.name}`);
       stops.forEach((s, i) => {
+        const li = document.createElement("li");
         const official =
-          s.type === "ionex" && s.official && String(s.id || "").startsWith("ionex-")
-            ? "官方站"
-            : s.demo
-              ? "示範站"
-              : "";
-        const extraBits = [
+          s.type === "ionex" && s.official && String(s.id || "").startsWith("ionex-");
+        const tag = official ? "官方站" : s.demo ? "示範站" : "";
+        const meta = [
           `沿線約 ${formatKm(s.alongKm)} · 離路線 ${s.distToRouteKm.toFixed(2)} km`,
-          official,
+          tag,
           s.address || "",
-        ].filter(Boolean);
-        addItem(`${i + 1}. ${typeLabel(s.type)} · ${s.name}`, extraBits.join(" · "));
+          official ? s.id : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        const verify =
+          official && s.gmapUrl
+            ? ` <a href="${s.gmapUrl}" target="_blank" rel="noopener" style="color:var(--ionex)">驗證座標</a>`
+            : official
+              ? ` <a href="https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lon}" target="_blank" rel="noopener" style="color:var(--ionex)">驗證座標</a>`
+              : "";
+        li.innerHTML = `<strong>${i + 1}. ${typeLabel(s.type)} · ${s.name}</strong><br /><span style="color:var(--muted)">${meta}</span>${verify}`;
+        ol.appendChild(li);
       });
       addItem(`終點 · ${end.name}`);
 

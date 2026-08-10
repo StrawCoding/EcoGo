@@ -16,7 +16,7 @@ from pathlib import Path
 API_URL = "https://api.ionex.com.tw/location"
 UA = "EcoGoStationSync/1.0 (+https://ecogo.wastebase.xyz/; cache sync)"
 # Taiwan-ish bbox with margin
-TW_LAT = (21.5, 25.6)
+TW_LAT = (21.5, 26.5)
 TW_LON = (118.0, 122.5)
 
 
@@ -51,6 +51,12 @@ def to_ecogo_stations(payload: dict) -> tuple[list[dict], dict]:
         if op and op != "opened":
             skipped["closed"] += 1
             continue
+        if str(item.get("gmap_open_status") or "").upper() == "CLOSED_PERMANENTLY":
+            skipped["closed"] += 1
+            continue
+        if str(item.get("station_spec") or "").lower() == "down":
+            skipped["closed"] += 1
+            continue
         try:
             lat = float(item.get("lat"))
             lon = float(item.get("lng"))
@@ -68,11 +74,13 @@ def to_ecogo_stations(payload: dict) -> tuple[list[dict], dict]:
         district = str(item.get("district") or "")
         address = str(item.get("address") or "")
         full_address = "".join(x for x in (city, district, address) if x)
+        gmap_name = str(item.get("gmap_name") or "")
+        name = gmap_name.replace("光陽Ionex換電站-", "") if gmap_name else str(item.get("name") or f"Ionex {sid}")
         stations.append(
             {
                 "id": f"ionex-{sid}",
                 "sourceId": sid,
-                "name": str(item.get("name") or f"Ionex {sid}"),
+                "name": name,
                 "type": "ionex",
                 "lat": round(lat, 7),
                 "lon": round(lon, 7),
@@ -80,6 +88,8 @@ def to_ecogo_stations(payload: dict) -> tuple[list[dict], dict]:
                 "district": district,
                 "address": address,
                 "fullAddress": full_address,
+                "gmap_name": gmap_name,
+                "gmap_url": item.get("gmap_url") or "",
                 "operating_status": "opened",
                 "unique_key": item.get("unique_key") or "",
             }
