@@ -388,14 +388,6 @@
       </div>
 
       <section class="card">
-        <h2>路線引擎（免費）</h2>
-        <p class="note" style="margin:0">
-          地圖 Leaflet + OSM · 路徑 Valhalla（主）／OSRM（備援）· 地址 Photon／Nominatim<br />
-          無需 API Key。匯出仍可開啟免費的 Google Maps 導航深連結。
-        </p>
-      </section>
-
-      <section class="card">
         <h2>交通模式</h2>
         <div class="mode-grid" role="radiogroup" aria-label="交通模式">
           <button type="button" class="mode-btn active" data-mode="car" id="modeCar">
@@ -538,6 +530,7 @@
     const TW_BBOX = "119.3,21.8,122.1,25.4";
     const LAST_ROUTE_KEY = "ecogo.lastRoute.v1";
     const LAST_MODE_KEY = "ecogo.lastMode.v1";
+    const LAST_STATION_KEY = "ecogo.lastStations.v1";
 
     const $ = (id) => document.getElementById(id);
     const state = {
@@ -650,6 +643,53 @@
         if (raw === "scooter" || raw === "car") return raw;
       } catch (_) {}
       return "car";
+    }
+
+    function clampNum(v, min, max, fallback) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.min(max, Math.max(min, n));
+    }
+
+    function saveLastStationPrefs() {
+      try {
+        localStorage.setItem(
+          LAST_STATION_KEY,
+          JSON.stringify({
+            ionex: { enabled: $("use-ionex").checked, km: clampNum($("km-ionex").value, 5, 200, 40) },
+            gogoro: { enabled: $("use-gogoro").checked, km: clampNum($("km-gogoro").value, 5, 200, 50) },
+            gas: { enabled: $("use-gas").checked, km: clampNum($("km-gas").value, 5, 200, 80) },
+            corridor: clampNum($("corridor").value, 0.5, 10, 2.5),
+            dataMode: $("dataMode").value === "osm" ? "osm" : "demo",
+          })
+        );
+      } catch (_) {}
+    }
+
+    function restoreLastStationPrefs() {
+      try {
+        const raw = localStorage.getItem(LAST_STATION_KEY);
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (data?.ionex) {
+          $("use-ionex").checked = !!data.ionex.enabled;
+          $("km-ionex").value = String(clampNum(data.ionex.km, 5, 200, 40));
+        }
+        if (data?.gogoro) {
+          $("use-gogoro").checked = !!data.gogoro.enabled;
+          $("km-gogoro").value = String(clampNum(data.gogoro.km, 5, 200, 50));
+        }
+        if (data?.gas) {
+          $("use-gas").checked = !!data.gas.enabled;
+          $("km-gas").value = String(clampNum(data.gas.km, 5, 200, 80));
+        }
+        if (data?.corridor != null) {
+          $("corridor").value = String(clampNum(data.corridor, 0.5, 10, 2.5));
+        }
+        if (data?.dataMode === "osm" || data?.dataMode === "demo") {
+          $("dataMode").value = data.dataMode;
+        }
+      } catch (_) {}
     }
 
     function setMode(mode, persist = true) {
@@ -1671,6 +1711,19 @@ out center 400;
         $(id).addEventListener("change", saveLastRouteInputs);
         $(id).addEventListener("blur", saveLastRouteInputs);
       });
+      [
+        "use-ionex",
+        "use-gogoro",
+        "use-gas",
+        "km-ionex",
+        "km-gogoro",
+        "km-gas",
+        "corridor",
+        "dataMode",
+      ].forEach((id) => {
+        $(id).addEventListener("change", saveLastStationPrefs);
+        $(id).addEventListener("input", saveLastStationPrefs);
+      });
       $("planBtn").addEventListener("click", plan);
       $("clearBtn").addEventListener("click", clearResult);
       $("openMapsBtn").addEventListener("click", () => {
@@ -1703,6 +1756,7 @@ out center 400;
     wireUi();
     restoreLastRouteInputs();
     setMode(restoreLastMode(), false);
+    restoreLastStationPrefs();
   </script>
 </body>
 </html>
