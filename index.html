@@ -525,13 +525,13 @@
           </label>
           <label class="field"><span class="lbl">站點資料</span>
             <select id="dataMode">
-              <option value="ionex" selected>Ionex 官方地圖快取</option>
-              <option value="osm">優先 OSM 即時</option>
-              <option value="demo">沿線示範站點</option>
+              <option value="ionex" selected>Ionex 官方（即時／快取）</option>
+              <option value="osm">Gogoro／加油站優先 OSM</option>
+              <option value="demo">Gogoro／加油站沿線示範（Ionex 仍用官方）</option>
             </select>
           </label>
         </div>
-        <p class="note">Ionex 規劃時優先打 <code>api.ionex.com.tw</code> 即時站點（與 map.ionex.com.tw 同源），失敗才用本地快取；只收營運中站。點行程「驗證座標」可對照 Google／官方座標。</p>
+        <p class="note">只要勾選 Ionex，一律只用 <code>api.ionex.com.tw</code> 官方站（失敗才快取），<strong>絕不會</strong>用示範點冒充。示範模式只補 Gogoro／加油站。行程可點「驗證座標」。</p>
       </section>
 
       <div class="actions">
@@ -803,6 +803,11 @@
         }
         if (data?.dataMode === "osm" || data?.dataMode === "demo" || data?.dataMode === "ionex") {
           $("dataMode").value = data.dataMode;
+        }
+        // 舊偏好若為 demo＋勾選 Ionex，會以為示範站是真站 → 強制改回官方模式
+        if ($("use-ionex").checked && $("dataMode").value === "demo") {
+          $("dataMode").value = "ionex";
+          saveLastStationPrefs();
         }
       } catch (_) {}
     }
@@ -1712,8 +1717,8 @@
 
     function buildDemoStations(latlngs, cum, totalKm, types = null) {
       const stations = [];
+      // 禁止製造假 Ionex：示範站只允許 Gogoro／加油站
       const specs = [
-        { type: "ionex", every: 18, offset: 8 },
         { type: "gogoro", every: 14, offset: 5 },
         { type: "gas", every: 28, offset: 12 },
       ].filter((spec) => !types || types.includes(spec.type));
@@ -1874,24 +1879,20 @@ out center 400;
       const wantGogoro = $("use-gogoro").checked;
       const wantGas = $("use-gas").checked;
 
-      if (mode === "demo") {
-        return {
-          stations: buildDemoStations(latlngs, cum, totalKm),
-          mode: "demo",
-        };
-      }
-
-      // Ionex 必須用官方地圖同源快取，禁止 OSM／示範點冒充
+      // Ionex 永遠走官方 API／快取；示範模式不可再 early-return 整包假站
       let ionexStations = [];
       let ionexMeta = "";
       if (wantIonex) {
         const cache = await loadIonexCache();
         ionexStations = cache.stations;
         ionexMeta = `${cache.count}站 · ${cache.live ? "即時API" : "快取"} · ${cache.fetchedAt || ""}`;
+        if (ionexStations.length < 1000) {
+          throw new Error("Ionex 官方站點異常，已停止以免使用錯誤示範點");
+        }
       }
 
       let extra = [];
-      if (mode === "osm" || wantGogoro || wantGas) {
+      if (mode === "osm" && (wantGogoro || wantGas)) {
         try {
           extra = await fetchOsmStations(latlngs, corridorKm);
         } catch (_) {
@@ -1899,47 +1900,37 @@ out center 400;
         }
       }
 
-      // 丟掉 OSM 裡不穩的 ionex 分類，改以官方快取為準
+      // 丟掉 OSM 裡不穩的 ionex 分類，改以官方為準
       const nonIonexOsm = extra.filter((s) => s.type !== "ionex");
       let stations = [...ionexStations, ...nonIonexOsm];
 
-      // 官方模式下只允許 ionex-* 官方站進入選站池
-      if (wantIonex && mode !== "demo") {
-        stations = stations.filter(
-          (s) => s.type !== "ionex" || (String(s.id || "").startsWith("ionex-") && !s.demo)
-        );
-      }
+      // 任何模式下都不允許假 Ionex 進入選站池
+      stations = stations.filter(
+        (s) => s.type !== "ionex" || (String(s.id || "").startsWith("ionex-") && !s.demo)
+      );
 
-      if (mode === "osm") {
-        const missing = [];
-        if (wantGogoro && !nonIonexOsm.some((s) => s.type === "gogoro")) missing.push("gogoro");
-        if (wantGas && !nonIonexOsm.some((s) => s.type === "gas")) missing.push("gas");
-        if (missing.length) {
-          stations = [
-            ...stations,
-            ...buildDemoStations(latlngs, cum, totalKm, missing),
-          ];
-        }
-        return {
-          stations,
-          mode: wantIonex ? `ionex-official+osm · ${ionexMeta}` : "osm",
-        };
-      }
-
-      // ionex 官方模式
-      if (wantIonex && ionexStations.length < 1000) {
-        throw new Error("Ionex 官方站點快取異常，已停止以免使用錯誤示範點");
-      }
       const missing = [];
       if (wantGogoro && !stations.some((s) => s.type === "gogoro")) missing.push("gogoro");
       if (wantGas && !stations.some((s) => s.type === "gas")) missing.push("gas");
+      // 缺資料時只補 gogoro／gas 示範站，永不補 ionex
       if (missing.length) {
         stations = [...stations, ...buildDemoStations(latlngs, cum, totalKm, missing)];
       }
-      return {
-        stations,
-        mode: wantIonex ? `ionex-official · ${ionexMeta}` : missing.length ? "demo-partial" : "none",
-      };
+
+      let modeLabel = "none";
+      if (wantIonex) {
+        modeLabel =
+          mode === "osm"
+            ? `ionex-official+osm · ${ionexMeta}`
+            : mode === "demo"
+              ? `ionex-official+demo-other · ${ionexMeta}`
+              : `ionex-official · ${ionexMeta}`;
+      } else if (mode === "demo" || missing.length) {
+        modeLabel = mode === "demo" ? "demo" : "demo-partial";
+      } else if (mode === "osm") {
+        modeLabel = "osm";
+      }
+      return { stations, mode: modeLabel };
     }
 
     function projectStations(stations, latlngs, cum) {
@@ -2265,9 +2256,8 @@ out center 400;
 
         const options = candidates.map((baseRoute, idx) => {
           let stops = pickStopsForRoute(baseRoute, stations, configs, corridor, dataMode);
-          // 官方／OSM 模式：只保留官方 Ionex；示範模式才允許 demo ionex
-          const preferOfficialIonex = $("use-ionex").checked && $("dataMode").value !== "demo";
-          if (preferOfficialIonex) {
+          // 勾選 Ionex → 只保留官方 ionex-*；示範假站一律剔除
+          if ($("use-ionex").checked) {
             stops = stops.filter(
               (s) =>
                 s.type !== "ionex" ||
