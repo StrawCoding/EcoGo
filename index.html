@@ -1835,6 +1835,13 @@ out center 400;
       const nonIonexOsm = extra.filter((s) => s.type !== "ionex");
       let stations = [...ionexStations, ...nonIonexOsm];
 
+      // 官方模式下只允許 ionex-* 官方站進入選站池
+      if (wantIonex && mode !== "demo") {
+        stations = stations.filter(
+          (s) => s.type !== "ionex" || (String(s.id || "").startsWith("ionex-") && !s.demo)
+        );
+      }
+
       if (mode === "osm") {
         const missing = [];
         if (wantGogoro && !nonIonexOsm.some((s) => s.type === "gogoro")) missing.push("gogoro");
@@ -2171,15 +2178,15 @@ out center 400;
         );
 
         const options = candidates.map((baseRoute, idx) => {
-          const stops = pickStopsForRoute(baseRoute, stations, configs, corridor, dataMode);
-          // 防呆：勾選 Ionex 時禁止 demo ionex 混入
-          if ($("use-ionex").checked) {
-            const bad = stops.filter(
-              (s) => s.type === "ionex" && (!String(s.id || "").startsWith("ionex-") || s.demo)
+          let stops = pickStopsForRoute(baseRoute, stations, configs, corridor, dataMode);
+          // 官方／OSM 模式：只保留官方 Ionex；示範模式才允許 demo ionex
+          const preferOfficialIonex = $("use-ionex").checked && $("dataMode").value !== "demo";
+          if (preferOfficialIonex) {
+            stops = stops.filter(
+              (s) =>
+                s.type !== "ionex" ||
+                (String(s.id || "").startsWith("ionex-") && !s.demo)
             );
-            if (bad.length) {
-              throw new Error("偵測到非官方 Ionex 站點，已中止以免導航到錯誤位置");
-            }
           }
           return {
             id: idx,
