@@ -8,7 +8,7 @@
 
 ## 功能
 
-- 自選地址（Photon／Nominatim 自動完成）或地圖點選起終點
+- 自選地址（地標別名／座標／Photon＋Nominatim 並行／台灣門牌正規化與結構化查詢）或地圖點選起終點
 - 汽車／機車模式（機車：Valhalla `motor_scooter`，排除國道／快速道路）
 - 各站類型獨立間隔（例：Ionex 每 40 km）
 - 規劃後直開 Google Maps（含 waypoints，免費深連結）
@@ -22,6 +22,16 @@
 4. **開啟 Google Maps** 或 **複製 Maps 連結**
 
 無需任何 API Key。
+
+## 地址解析方案（免費）
+
+1. **地標別名**：台北車站、左營高鐵、台大等常用點
+2. **座標貼上**：`25.0478,121.5170`
+3. **Photon + Nominatim 並行**，結果去重排序
+4. **台灣門牌正規化**：全形數字、台/臺互換、`路名+門牌` 空白化，並用 Nominatim structured（street/city）補強
+5. **失敗備援**：改用地名／路名，或地圖點選
+
+說明：開源 OSM 對台灣「完整門牌號」覆蓋有限；地名／車站／路名通常最穩。若未來要 100% 門牌精度，可再接政府 TGOS／內政部地址 API（需申請，非純開源）。
 
 ## 本機開啟
 
@@ -39,7 +49,7 @@ python3 -m http.server 8080
 | 地圖 | Leaflet + OpenStreetMap tiles |
 | 路線 | Valhalla（主）／OSRM（汽車備援） |
 | 機車 | Valhalla `motor_scooter` + `use_highways:0` |
-| 地址 | Photon（Komoot）／Nominatim |
+| 地址 | 別名／座標／Photon／Nominatim（含結構化） |
 | 選站 | 沿路徑依間隔找最近站，再以 waypoints 精算 |
 | 匯出 | Google Maps `/dir/` 深連結（免金鑰） |
 | 站點備援 | OSM Overpass（可選）／內建沿線示範資料 |
