@@ -124,7 +124,39 @@
     .mode-btn .d { display: block; color: var(--muted); font-size: 0.72rem; line-height: 1.35; }
     .pin-row, .maps-row, .actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .pin-row, .maps-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .row-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      align-items: stretch;
+    }
+    .row-2 > .field {
+      margin-bottom: 0;
+      height: 100%;
+      grid-template-rows: auto 44px;
+      align-content: stretch;
+    }
+    .row-2 > .field input,
+    .row-2 > .field select {
+      height: 44px;
+      min-height: 44px;
+      max-height: 44px;
+      padding: 0 12px;
+      line-height: 1.2;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .row-2 > .field select {
+      background-image:
+        linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position:
+        calc(100% - 18px) calc(50% - 3px),
+        calc(100% - 12px) calc(50% - 3px);
+      background-size: 6px 6px, 6px 6px;
+      background-repeat: no-repeat;
+      padding-right: 32px;
+    }
     .btn-ghost, .btn-primary, .btn-maps, .btn-load {
       border: 1px solid var(--line);
       background: #121b17;
@@ -521,6 +553,7 @@
     ];
     const TW_BBOX = "119.3,21.8,122.1,25.4";
     const LAST_ROUTE_KEY = "ecogo.lastRoute.v1";
+    const LAST_MODE_KEY = "ecogo.lastMode.v1";
 
     const $ = (id) => document.getElementById(id);
     const state = {
@@ -621,15 +654,31 @@
       $("copyMapsBtn").disabled = !on;
     }
 
-    function setMode(mode) {
-      state.mode = mode;
-      $("modeCar").classList.toggle("active", mode === "car");
-      $("modeScooter").classList.toggle("active", mode === "scooter");
+    function saveLastMode(mode) {
+      try {
+        localStorage.setItem(LAST_MODE_KEY, mode === "scooter" ? "scooter" : "car");
+      } catch (_) {}
+    }
+
+    function restoreLastMode() {
+      try {
+        const raw = localStorage.getItem(LAST_MODE_KEY);
+        if (raw === "scooter" || raw === "car") return raw;
+      } catch (_) {}
+      return "car";
+    }
+
+    function setMode(mode, persist = true) {
+      const next = mode === "scooter" ? "scooter" : "car";
+      state.mode = next;
+      $("modeCar").classList.toggle("active", next === "car");
+      $("modeScooter").classList.toggle("active", next === "scooter");
       $("modeNote").textContent =
-        mode === "car"
+        next === "car"
           ? "汽車模式：Valhalla auto（可用國道／快速道路），失敗時改 OSRM。"
           : "機車模式：Valhalla motor_scooter，排除國道／快速道路重點。";
       setMapsButtons(false);
+      if (persist) saveLastMode(next);
     }
 
     function decodePolyline(str, precision = 5) {
@@ -1669,7 +1718,7 @@ out center 400;
     initMap();
     wireUi();
     restoreLastRouteInputs();
-    setMode("car");
+    setMode(restoreLastMode(), false);
   </script>
 </body>
 </html>
