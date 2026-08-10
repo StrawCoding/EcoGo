@@ -280,6 +280,32 @@
       gap: 8px;
       margin-bottom: 12px;
     }
+    .route-options {
+      display: grid;
+      gap: 8px;
+      margin: 0 0 12px;
+    }
+    .route-option {
+      text-align: left;
+      border: 1px solid var(--line);
+      background: #121b17;
+      color: var(--text);
+      border-radius: 12px;
+      padding: 10px 12px;
+      min-height: 56px;
+      cursor: pointer;
+      font: inherit;
+      display: grid;
+      gap: 2px;
+    }
+    .route-option:hover { border-color: color-mix(in srgb, var(--route) 55%, var(--line)); }
+    .route-option.active {
+      border-color: color-mix(in srgb, var(--route) 75%, var(--line));
+      background: color-mix(in srgb, var(--route) 14%, #121b17);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--route) 30%, transparent);
+    }
+    .route-option .t { font-weight: 600; font-size: 0.9rem; }
+    .route-option .d { color: var(--muted); font-size: 0.74rem; line-height: 1.35; }
     .metric {
       background: #121b17;
       border: 1px solid var(--line);
@@ -526,6 +552,7 @@
 
       <section class="card" id="resultCard" hidden>
         <h2>規劃結果</h2>
+        <div class="route-options" id="routeOptions" hidden></div>
         <div class="summary">
           <div class="metric"><div class="k">總里程</div><div class="v" id="mDistance">—</div></div>
           <div class="metric"><div class="k">預估時間</div><div class="v" id="mDuration">—</div></div>
@@ -574,8 +601,13 @@
       mapsUrl: null,
       map: null,
       routeLayer: null,
+      altRouteLayers: [],
       markers: [],
       suggestTimers: {},
+      routeOptions: [],
+      selectedRouteIndex: 0,
+      planContext: null,
+      routeSwitching: false,
     };
 
     function setStatus(msg, kind = "") {
@@ -885,11 +917,22 @@
         state.map.removeLayer(state.routeLayer);
         state.routeLayer = null;
       }
+      (state.altRouteLayers || []).forEach((layer) => {
+        try { state.map.removeLayer(layer); } catch (_) {}
+      });
+      state.altRouteLayers = [];
       state.markers = state.markers.filter((m) => {
         const keep = keepEndpoints && (m._ecogoRole === "start" || m._ecogoRole === "end");
         if (!keep) state.map.removeLayer(m);
         return keep;
       });
+    }
+
+    function clearAltRouteLayers() {
+      (state.altRouteLayers || []).forEach((layer) => {
+        try { state.map.removeLayer(layer); } catch (_) {}
+      });
+      state.altRouteLayers = [];
     }
 
     function syncEndpointMarker(which, place) {
@@ -1362,13 +1405,33 @@
       });
     }
 
-    async function fetchValhallaRoute(locations, mode) {
+    function parseValhallaTrip(trip, costing) {
+      if (!trip?.legs?.length) throw new Error("Valhalla 路線失敗");
+      const latlngs = [];
+      let durationSec = 0;
+      let distanceKm = 0;
+      trip.legs.forEach((leg) => {
+        latlngs.push(...decodePolyline(leg.shape, 6));
+        durationSec += leg.summary.time;
+        distanceKm += leg.summary.length;
+      });
+      return {
+        latlngs,
+        distanceKm: trip.summary?.length || distanceKm,
+        durationSec: trip.summary?.time || durationSec,
+        engine: `valhalla:${costing}`,
+        hasHighway: !!trip.summary?.has_highway,
+      };
+    }
+
+    async function fetchValhallaRoutes(locations, mode, alternates = 2) {
       const costing = mode === "scooter" ? "motor_scooter" : "auto";
       const body = {
         locations: locations.map((p) => ({ lat: p.lat, lon: p.lon })),
         costing,
         directions_options: { units: "kilometers" },
       };
+      if (alternates > 0) body.alternates = alternates;
       if (mode === "scooter") {
         body.costing_options = {
           motor_scooter: {
@@ -1386,51 +1449,119 @@
       });
       if (!res.ok) throw new Error(`Valhalla ${res.status}`);
       const data = await res.json();
-      if (!data.trip || !data.trip.legs) throw new Error(data.error || "Valhalla 路線失敗");
-      const latlngs = [];
-      let durationSec = 0;
-      let distanceKm = 0;
-      data.trip.legs.forEach((leg) => {
-        latlngs.push(...decodePolyline(leg.shape, 6));
-        durationSec += leg.summary.time;
-        distanceKm += leg.summary.length;
+      if (!data.trip) throw new Error(data.error || "Valhalla 路線失敗");
+      const trips = [data.trip];
+      (data.alternates || []).forEach((alt) => {
+        const trip = alt?.trip || alt;
+        if (trip?.legs) trips.push(trip);
       });
-      return {
-        latlngs,
-        distanceKm: data.trip.summary.length || distanceKm,
-        durationSec: data.trip.summary.time || durationSec,
-        engine: `valhalla:${costing}`,
-        hasHighway: !!data.trip.summary.has_highway,
-      };
+      return trips.map((trip) => parseValhallaTrip(trip, costing));
     }
 
-    async function fetchOsrmRoute(locations) {
+    async function fetchOsrmRoutes(locations, alternatives = 3) {
       const path = locations.map((p) => `${p.lon},${p.lat}`).join(";");
-      const url = `${OSRM_URL}/driving/${path}?overview=full&geometries=polyline&steps=false`;
+      const altParam = alternatives > 0 ? `&alternatives=${alternatives}` : "";
+      const url = `${OSRM_URL}/driving/${path}?overview=full&geometries=polyline&steps=false${altParam}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`OSRM ${res.status}`);
       const data = await res.json();
-      if (data.code !== "Ok" || !data.routes?.[0]) throw new Error("OSRM 路線失敗");
-      const route = data.routes[0];
-      return {
+      if (data.code !== "Ok" || !data.routes?.length) throw new Error("OSRM 路線失敗");
+      return data.routes.map((route) => ({
         latlngs: decodePolyline(route.geometry, 5),
         distanceKm: route.distance / 1000,
         durationSec: route.duration,
         engine: "osrm:driving",
         hasHighway: null,
-      };
+      }));
+    }
+
+    function routeFingerprint(route) {
+      const pts = route.latlngs || [];
+      if (pts.length < 2) return `${route.distanceKm}|${route.durationSec}`;
+      const mid = pts[Math.floor(pts.length / 2)];
+      const q = pts[Math.floor(pts.length / 4)];
+      const t = pts[Math.floor((pts.length * 3) / 4)];
+      return [
+        route.distanceKm.toFixed(1),
+        Math.round(route.durationSec / 60),
+        mid.lat.toFixed(3),
+        mid.lon.toFixed(3),
+        q.lat.toFixed(3),
+        q.lon.toFixed(3),
+        t.lat.toFixed(3),
+        t.lon.toFixed(3),
+      ].join("|");
+    }
+
+    function dedupeRoutes(routes, max = 4) {
+      const out = [];
+      const seen = new Set();
+      for (const route of routes) {
+        if (!route?.latlngs?.length) continue;
+        const fp = routeFingerprint(route);
+        if (seen.has(fp)) continue;
+        // also skip near-duplicates by distance+duration
+        const near = out.some(
+          (r) =>
+            Math.abs(r.distanceKm - route.distanceKm) / Math.max(r.distanceKm, 1) < 0.03 &&
+            Math.abs(r.durationSec - route.durationSec) < 180 &&
+            haversineKm(
+              r.latlngs[Math.floor(r.latlngs.length / 2)],
+              route.latlngs[Math.floor(route.latlngs.length / 2)]
+            ) < 2.5
+        );
+        if (near) continue;
+        seen.add(fp);
+        out.push(route);
+        if (out.length >= max) break;
+      }
+      return out.sort((a, b) => a.durationSec - b.durationSec || a.distanceKm - b.distanceKm);
+    }
+
+    async function fetchRouteCandidates(start, end, mode) {
+      const locations = [start, end];
+      const collected = [];
+      try {
+        collected.push(...(await fetchValhallaRoutes(locations, mode, 2)));
+      } catch (err) {
+        console.warn("Valhalla candidates failed", err);
+      }
+      if (mode === "car") {
+        try {
+          collected.push(...(await fetchOsrmRoutes(locations, 3)));
+        } catch (err) {
+          console.warn("OSRM candidates failed", err);
+        }
+      }
+      const unique = dedupeRoutes(collected, 4);
+      if (!unique.length) {
+        // last resort single fetch path
+        if (mode === "scooter") {
+          const one = await fetchValhallaRoutes(locations, "scooter", 0);
+          return dedupeRoutes(one, 1);
+        }
+        try {
+          return dedupeRoutes(await fetchValhallaRoutes(locations, "car", 0), 1);
+        } catch (_) {
+          return dedupeRoutes(await fetchOsrmRoutes(locations, 0), 1);
+        }
+      }
+      return unique;
     }
 
     async function fetchRoute(start, end, mode, stops = []) {
       const locations = [start, ...stops, end];
       if (mode === "scooter") {
-        return fetchValhallaRoute(locations, "scooter");
+        const routes = await fetchValhallaRoutes(locations, "scooter", 0);
+        return routes[0];
       }
       try {
-        return await fetchValhallaRoute(locations, "car");
+        const routes = await fetchValhallaRoutes(locations, "car", 0);
+        return routes[0];
       } catch (err) {
         console.warn("Valhalla failed, fallback OSRM", err);
-        return fetchOsrmRoute(locations);
+        const routes = await fetchOsrmRoutes(locations, 0);
+        return routes[0];
       }
     }
 
@@ -1683,12 +1814,71 @@ out center 400;
       };
     }
 
-    function renderResult({ start, end, route, stops, mode, dataMode }) {
-      clearOverlayMarkers(true);
+    function renderRouteOptions(options, selectedIndex) {
+      const box = $("routeOptions");
+      if (!box) return;
+      box.innerHTML = "";
+      if (!options?.length || options.length < 2) {
+        box.hidden = true;
+        return;
+      }
+      box.hidden = false;
+      options.forEach((opt, idx) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "route-option" + (idx === selectedIndex ? " active" : "");
+        btn.disabled = !!state.routeSwitching;
+        const shown = opt.baseRoute;
+        const hwy =
+          shown.hasHighway === true
+            ? "含國道"
+            : shown.hasHighway === false
+              ? "避開國道"
+              : "路徑";
+        btn.innerHTML = `<span class="t">路線 ${idx + 1} · ${formatKm(shown.distanceKm)} · ${formatDuration(shown.durationSec)}</span>
+          <span class="d">${hwy} · 預估停靠 ${opt.stops.length} 站 · ${shown.engine}</span>`;
+        btn.addEventListener("click", () => {
+          if (state.selectedRouteIndex === idx || state.routeSwitching) return;
+          applyRouteOption(idx);
+        });
+        box.appendChild(btn);
+      });
+    }
+
+    function drawRouteLayers(selectedOpt, allOptions) {
+      clearAltRouteLayers();
+      if (state.routeLayer) {
+        state.map.removeLayer(state.routeLayer);
+        state.routeLayer = null;
+      }
+      (allOptions || []).forEach((opt, idx) => {
+        if (idx === state.selectedRouteIndex) return;
+        const geom = opt.baseRoute.latlngs;
+        const layer = L.polyline(
+          geom.map((p) => [p.lat, p.lon]),
+          { color: "#6f8f86", weight: 4, opacity: 0.35, dashArray: "6 8" }
+        ).addTo(state.map);
+        layer.on("click", () => {
+          if (!state.routeSwitching) applyRouteOption(idx);
+        });
+        state.altRouteLayers.push(layer);
+      });
+      const selectedGeom = (selectedOpt.route || selectedOpt.baseRoute).latlngs;
       state.routeLayer = L.polyline(
-        route.latlngs.map((p) => [p.lat, p.lon]),
-        { color: "#3dd6c6", weight: 5, opacity: 0.9 }
+        selectedGeom.map((p) => [p.lat, p.lon]),
+        { color: "#3dd6c6", weight: 5, opacity: 0.95 }
       ).addTo(state.map);
+    }
+
+    function renderResult({ start, end, route, stops, mode, dataMode }) {
+      // stop markers only; route layers drawn separately
+      state.markers = state.markers.filter((m) => {
+        if (m._ecogoRole === "stop") {
+          state.map.removeLayer(m);
+          return false;
+        }
+        return true;
+      });
       stops.forEach((s, idx) => {
         const marker = L.marker([s.lat, s.lon], {
           icon: circleIcon(typeColor(s.type), 14),
@@ -1735,6 +1925,76 @@ out center 400;
       setMapsButtons(true);
     }
 
+    function pickStopsForRoute(baseRoute, stations, configs, corridor, dataMode) {
+      const metrics = buildRouteMetrics(baseRoute.latlngs);
+      const projected = projectStations(stations, baseRoute.latlngs, metrics.cum);
+      const stops = configs
+        .flatMap((cfg) =>
+          pickIntervalStops(
+            projected,
+            cfg.type,
+            cfg.interval,
+            corridor + (dataMode === "demo" ? 1.5 : 0),
+            baseRoute.distanceKm
+          )
+        )
+        .sort((a, b) => a.alongKm - b.alongKm);
+      const unique = [];
+      stops.forEach((s) => {
+        if (unique.some((u) => haversineKm(u, s) < 0.35)) return;
+        unique.push(s);
+      });
+      return unique;
+    }
+
+    async function applyRouteOption(index, { refine = true } = {}) {
+      const opt = state.routeOptions[index];
+      const ctx = state.planContext;
+      if (!opt || !ctx || state.routeSwitching) return;
+      state.routeSwitching = true;
+      state.selectedRouteIndex = index;
+      renderRouteOptions(state.routeOptions, index);
+      try {
+        let route = opt.baseRoute;
+        const stops = opt.stops;
+        if (refine && stops.length) {
+          setStatus(`精算路線 ${index + 1} 停靠點…`);
+          try {
+            route = await fetchRoute(ctx.start, ctx.end, ctx.mode, stops);
+          } catch (err) {
+            console.warn("waypoint refine failed", err);
+            route = opt.baseRoute;
+          }
+        }
+        opt.route = route;
+        drawRouteLayers(opt, state.routeOptions);
+        renderRouteOptions(state.routeOptions, index);
+        renderResult({
+          start: ctx.start,
+          end: ctx.end,
+          route,
+          stops,
+          mode: ctx.mode,
+          dataMode: ctx.dataMode,
+        });
+        const modeText = ctx.mode === "car" ? "汽車" : "機車（排除國道／快速）";
+        const hwy =
+          route.hasHighway === true
+            ? "（含國道）"
+            : route.hasHighway === false
+              ? "（不含國道）"
+              : "";
+        const n = state.routeOptions.length;
+        setStatus(
+          `完成：已選路線 ${index + 1}/${n} · ${modeText}${hwy} ${formatKm(route.distanceKm)}／${formatDuration(route.durationSec)}，停靠 ${stops.length} 站（${ctx.dataMode} · ${route.engine}）`,
+          "ok"
+        );
+      } finally {
+        state.routeSwitching = false;
+        renderRouteOptions(state.routeOptions, state.selectedRouteIndex);
+      }
+    }
+
     function getTypeConfig() {
       return [
         { type: "ionex", enabled: $("use-ionex").checked, interval: +$("km-ionex").value },
@@ -1764,67 +2024,37 @@ out center 400;
         const configs = getTypeConfig().filter((c) => c.enabled);
         if (!configs.length) throw new Error("請至少勾選一種站點類型");
 
-        setStatus(`以 ${state.mode === "car" ? "汽車" : "機車"} 模式計算開源路線…`);
-        let route = await fetchRoute(start, end, state.mode);
-        const metrics = buildRouteMetrics(route.latlngs);
-        const corridor = +$("corridor").value || 2.5;
+        setStatus(`以 ${state.mode === "car" ? "汽車" : "機車"} 模式尋找多條開源路線…`);
+        clearOverlayMarkers(true);
+        const candidates = await fetchRouteCandidates(start, end, state.mode);
+        if (!candidates.length) throw new Error("找不到可用路線");
 
-        setStatus("搜尋沿線站點…");
+        const corridor = +$("corridor").value || 2.5;
+        setStatus(`找到 ${candidates.length} 條路線，搜尋沿線站點…`);
+
+        // use first route geometry for OSM bbox; Ionex cache is nationwide
+        const seedMetrics = buildRouteMetrics(candidates[0].latlngs);
         const { stations, mode: dataMode } = await fetchStationsAlongRoute(
-          route.latlngs,
-          metrics.cum,
+          candidates[0].latlngs,
+          seedMetrics.cum,
           corridor
         );
-        const projected = projectStations(stations, route.latlngs, metrics.cum);
 
-        const stops = configs
-          .flatMap((cfg) =>
-            pickIntervalStops(
-              projected,
-              cfg.type,
-              cfg.interval,
-              corridor + (dataMode === "demo" ? 1.5 : 0),
-              route.distanceKm
-            )
-          )
-          .sort((a, b) => a.alongKm - b.alongKm);
-
-        // de-dupe nearby stops
-        const unique = [];
-        stops.forEach((s) => {
-          if (unique.some((u) => haversineKm(u, s) < 0.35)) return;
-          unique.push(s);
+        const options = candidates.map((baseRoute, idx) => {
+          const stops = pickStopsForRoute(baseRoute, stations, configs, corridor, dataMode);
+          return {
+            id: idx,
+            label: `路線 ${idx + 1}`,
+            baseRoute,
+            route: baseRoute,
+            stops,
+          };
         });
 
-        if (unique.length) {
-          setStatus("依停靠點精算最終路線…");
-          try {
-            route = await fetchRoute(start, end, state.mode, unique);
-          } catch (err) {
-            console.warn("waypoint refine failed", err);
-          }
-        }
-
-        renderResult({
-          start,
-          end,
-          route,
-          stops: unique,
-          mode: state.mode,
-          dataMode,
-        });
-
-        const modeText = state.mode === "car" ? "汽車" : "機車（排除國道／快速）";
-        const hwy =
-          route.hasHighway === true
-            ? "（含國道）"
-            : route.hasHighway === false
-              ? "（不含國道）"
-              : "";
-        setStatus(
-          `完成：${modeText}${hwy} ${formatKm(route.distanceKm)}／${formatDuration(route.durationSec)}，停靠 ${unique.length} 站（${dataMode} · ${route.engine}）`,
-          "ok"
-        );
+        state.routeOptions = options;
+        state.planContext = { start, end, mode: state.mode, configs, corridor, dataMode, stations };
+        state.selectedRouteIndex = 0;
+        await applyRouteOption(0, { refine: true });
       } catch (err) {
         console.error(err);
         setStatus(err.message || String(err), "err");
@@ -1838,7 +2068,15 @@ out center 400;
       $("resultCard").hidden = true;
       $("itinerary").innerHTML = "";
       $("gmapsUrl").textContent = "";
+      if ($("routeOptions")) {
+        $("routeOptions").innerHTML = "";
+        $("routeOptions").hidden = true;
+      }
       state.mapsUrl = null;
+      state.routeOptions = [];
+      state.planContext = null;
+      state.selectedRouteIndex = 0;
+      state.routeSwitching = false;
       setMapsButtons(false);
       setStatus("已清除規劃結果。");
     }
