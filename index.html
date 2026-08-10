@@ -1451,8 +1451,6 @@
 
     function routeStyleLabel(route) {
       if (route.labelHint) return route.labelHint;
-      const blob = (route.streetNames || []).join(" ");
-      if (/台\s*7|北橫/.test(blob)) return "北橫／台7";
       if (route.hasHighway === true) return "含國道";
       if (route.hasHighway === false) return "避開國道";
       return "路徑";
