@@ -122,11 +122,10 @@
     }
     .mode-btn .t { display: block; font-weight: 600; font-size: 0.95rem; }
     .mode-btn .d { display: block; color: var(--muted); font-size: 0.72rem; line-height: 1.35; }
-    .pin-row, .maps-row, .presets, .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .pin-row, .maps-row, .actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .pin-row, .maps-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .presets { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 8px; }
     .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .presets button, .btn-ghost, .btn-primary, .btn-maps, .btn-load {
+    .btn-ghost, .btn-primary, .btn-maps, .btn-load {
       border: 1px solid var(--line);
       background: #121b17;
       color: var(--text);
@@ -144,8 +143,7 @@
       text-align: center;
       white-space: nowrap;
     }
-    .presets button { white-space: normal; font-size: 0.78rem; padding: 8px 6px; }
-    .presets button:hover, .btn-ghost:hover { border-color: var(--ionex); }
+    .btn-ghost:hover { border-color: var(--ionex); }
     .btn-primary {
       background: linear-gradient(135deg, #1f8f82, #2ec4b6);
       border-color: transparent;
@@ -161,7 +159,7 @@
       font-weight: 600;
     }
     .btn-ghost { background: #121b17; }
-    .btn-primary:disabled, .btn-maps:disabled, .btn-ghost:disabled, .presets button:disabled {
+    .btn-primary:disabled, .btn-maps:disabled, .btn-ghost:disabled {
       opacity: 0.45; cursor: not-allowed;
     }
     .station-type { display: grid; gap: 8px; }
@@ -203,9 +201,6 @@
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: color-mix(in srgb, var(--panel) 92%, #0a100e);
-      position: sticky;
-      bottom: 0;
-      z-index: 5;
     }
     .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
     .swatch.ionex { background: var(--ionex); }
@@ -352,9 +347,7 @@
       .app { grid-template-columns: 1fr; height: auto; min-height: 100%; }
       .sidebar { border-right: 0; border-bottom: 1px solid var(--line); max-height: none; }
       .map-wrap { height: 58vh; min-height: 360px; }
-      .presets { grid-template-columns: 1fr; }
       .pin-row, .maps-row, .row-2 { grid-template-columns: 1fr; }
-      .actions { position: static; }
       .mode-btn { min-height: 68px; }
     }
     @media (max-width: 420px) {
@@ -415,11 +408,6 @@
         <div class="pin-row">
           <button type="button" class="btn-ghost" id="pinStartBtn">地圖點選起點</button>
           <button type="button" class="btn-ghost" id="pinEndBtn">地圖點選終點</button>
-        </div>
-        <div class="presets" aria-label="常用路線">
-          <button type="button" data-preset="taipei-taichung">台北 → 台中</button>
-          <button type="button" data-preset="taipei-hsinchu">台北 → 新竹</button>
-          <button type="button" data-preset="kaohsiung-tainan">高雄 → 台南</button>
         </div>
         <div class="geo-help">
           <strong>地址解析方案（免費）</strong><br />
@@ -532,20 +520,7 @@
       "https://overpass.osm.ch/api/interpreter",
     ];
     const TW_BBOX = "119.3,21.8,122.1,25.4";
-    const PRESETS = {
-      "taipei-taichung": {
-        start: { name: "台北車站", lat: 25.0478, lon: 121.5170 },
-        end: { name: "台中火車站", lat: 24.1369, lon: 120.6850 },
-      },
-      "taipei-hsinchu": {
-        start: { name: "台北車站", lat: 25.0478, lon: 121.5170 },
-        end: { name: "新竹火車站", lat: 24.8016, lon: 120.9717 },
-      },
-      "kaohsiung-tainan": {
-        start: { name: "高雄火車站", lat: 22.6397, lon: 120.3020 },
-        end: { name: "台南火車站", lat: 22.9971, lon: 120.2125 },
-      },
-    };
+    const LAST_ROUTE_KEY = "ecogo.lastRoute.v1";
 
     const $ = (id) => document.getElementById(id);
     const state = {
@@ -610,12 +585,35 @@
       el.className = "picked ok";
     }
 
+    function saveLastRouteInputs() {
+      try {
+        localStorage.setItem(
+          LAST_ROUTE_KEY,
+          JSON.stringify({
+            start: $("start").value.trim(),
+            end: $("end").value.trim(),
+          })
+        );
+      } catch (_) {}
+    }
+
+    function restoreLastRouteInputs() {
+      try {
+        const raw = localStorage.getItem(LAST_ROUTE_KEY);
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (typeof data?.start === "string" && data.start) $("start").value = data.start;
+        if (typeof data?.end === "string" && data.end) $("end").value = data.end;
+      } catch (_) {}
+    }
+
     function setPlace(which, place, fillInput = true) {
       state[which] = place;
       if (fillInput) $(which).value = place.name;
       showPicked(which, place);
       syncEndpointMarker(which, place);
       setMapsButtons(false);
+      saveLastRouteInputs();
     }
 
     function setMapsButtons(on) {
@@ -1630,19 +1628,16 @@ out center 400;
       setStatus("已清除規劃結果。");
     }
 
-    function applyPreset(key) {
-      const p = PRESETS[key];
-      if (!p) return;
-      setPlace("start", { ...p.start });
-      setPlace("end", { ...p.end });
-      setStatus(`已套用預設：${p.start.name} → ${p.end.name}`, "ok");
-    }
-
     function wireUi() {
       $("modeCar").addEventListener("click", () => setMode("car"));
       $("modeScooter").addEventListener("click", () => setMode("scooter"));
       wireSuggest("start");
       wireSuggest("end");
+      ["start", "end"].forEach((id) => {
+        $(id).addEventListener("input", saveLastRouteInputs);
+        $(id).addEventListener("change", saveLastRouteInputs);
+        $(id).addEventListener("blur", saveLastRouteInputs);
+      });
       $("planBtn").addEventListener("click", plan);
       $("clearBtn").addEventListener("click", clearResult);
       $("openMapsBtn").addEventListener("click", () => {
@@ -1669,13 +1664,11 @@ out center 400;
         $("mapHint").textContent = "在地圖上點一下設定終點";
         setStatus("請在地圖點選終點。");
       });
-      document.querySelectorAll("[data-preset]").forEach((btn) => {
-        btn.addEventListener("click", () => applyPreset(btn.dataset.preset));
-      });
     }
 
     initMap();
     wireUi();
+    restoreLastRouteInputs();
     setMode("car");
   </script>
 </body>
