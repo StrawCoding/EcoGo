@@ -969,6 +969,14 @@
       "高鐵左營": { name: "高鐵左營站", lat: 22.6871, lon: 120.3077 },
       "高鐵左營站": { name: "高鐵左營站", lat: 22.6871, lon: 120.3077 },
       "桃園機場": { name: "桃園國際機場", lat: 25.0797, lon: 121.2342 },
+      "大溪": { name: "桃園大溪", lat: 24.8839, lon: 121.2892 },
+      "桃園大溪": { name: "桃園大溪", lat: 24.8839, lon: 121.2892 },
+      "大溪區": { name: "桃園大溪", lat: 24.8839, lon: 121.2892 },
+      "大溪老街": { name: "大溪老街", lat: 24.8839, lon: 121.2892 },
+      "宜蘭": { name: "宜蘭車站", lat: 24.7545, lon: 121.7580 },
+      "宜蘭市": { name: "宜蘭車站", lat: 24.7545, lon: 121.7580 },
+      "宜蘭車站": { name: "宜蘭車站", lat: 24.7545, lon: 121.7580 },
+      "宜蘭火車站": { name: "宜蘭火車站", lat: 24.7545, lon: 121.7580 },
       "台大": { name: "國立臺灣大學", lat: 25.0168, lon: 121.5385 },
       "國立台灣大學": { name: "國立臺灣大學", lat: 25.0168, lon: 121.5385 },
       "國立臺灣大學": { name: "國立臺灣大學", lat: 25.0168, lon: 121.5385 },
@@ -1405,26 +1413,45 @@
       });
     }
 
-    function parseValhallaTrip(trip, costing) {
+    function parseValhallaTrip(trip, costing, meta = {}) {
       if (!trip?.legs?.length) throw new Error("Valhalla 路線失敗");
       const latlngs = [];
+      const streetNames = [];
       let durationSec = 0;
       let distanceKm = 0;
       trip.legs.forEach((leg) => {
         latlngs.push(...decodePolyline(leg.shape, 6));
         durationSec += leg.summary.time;
         distanceKm += leg.summary.length;
+        (leg.maneuvers || []).forEach((m) => {
+          (m.street_names || []).forEach((n) => streetNames.push(String(n)));
+        });
       });
+      const usesTw7 = streetNames.some((n) => /台\s*7|北橫/.test(String(n)));
+      const noHwy = !trip.summary?.has_highway;
       return {
         latlngs,
         distanceKm: trip.summary?.length || distanceKm,
         durationSec: trip.summary?.time || durationSec,
         engine: `valhalla:${costing}`,
         hasHighway: !!trip.summary?.has_highway,
+        streetNames: [...new Set(streetNames)].slice(0, 40),
+        // 僅在非國道路線才標北橫，避免國道線擦到宜蘭台7市區段被誤標
+        labelHint: meta.labelHint || (usesTw7 && noHwy ? "北橫／台7" : ""),
+        preferScenic: !!meta.preferScenic || (usesTw7 && noHwy),
       };
     }
 
-    async function fetchValhallaRoutes(locations, mode, alternates = 2) {
+    function routeStyleLabel(route) {
+      if (route.labelHint) return route.labelHint;
+      const blob = (route.streetNames || []).join(" ");
+      if (/台\s*7|北橫/.test(blob)) return "北橫／台7";
+      if (route.hasHighway === true) return "含國道";
+      if (route.hasHighway === false) return "避開國道";
+      return "路徑";
+    }
+
+    async function fetchValhallaRoutes(locations, mode, alternates = 2, options = {}) {
       const costing = mode === "scooter" ? "motor_scooter" : "auto";
       const body = {
         locations: locations.map((p) => ({ lat: p.lat, lon: p.lon })),
@@ -1441,6 +1468,8 @@
             use_trails: 0,
           },
         };
+      } else if (options.costingOptions) {
+        body.costing_options = { auto: options.costingOptions };
       }
       const res = await fetch(VALHALLA_URL, {
         method: "POST",
@@ -1455,7 +1484,7 @@
         const trip = alt?.trip || alt;
         if (trip?.legs) trips.push(trip);
       });
-      return trips.map((trip) => parseValhallaTrip(trip, costing));
+      return trips.map((trip) => parseValhallaTrip(trip, costing, options.meta || {}));
     }
 
     async function fetchOsrmRoutes(locations, alternatives = 3) {
@@ -1472,6 +1501,8 @@
         durationSec: route.duration,
         engine: "osrm:driving",
         hasHighway: null,
+        streetNames: [],
+        labelHint: "",
       }));
     }
 
@@ -1493,14 +1524,13 @@
       ].join("|");
     }
 
-    function dedupeRoutes(routes, max = 4) {
+    function dedupeRoutes(routes, max = 5) {
       const out = [];
       const seen = new Set();
       for (const route of routes) {
         if (!route?.latlngs?.length) continue;
         const fp = routeFingerprint(route);
         if (seen.has(fp)) continue;
-        // also skip near-duplicates by distance+duration
         const near = out.some(
           (r) =>
             Math.abs(r.distanceKm - route.distanceKm) / Math.max(r.distanceKm, 1) < 0.03 &&
@@ -1518,6 +1548,20 @@
       return out.sort((a, b) => a.durationSec - b.durationSec || a.distanceKm - b.distanceKm);
     }
 
+    function inBBox(p, bbox) {
+      return p.lat >= bbox[0] && p.lat <= bbox[2] && p.lon >= bbox[1] && p.lon <= bbox[3];
+    }
+
+    function shouldOfferTw7(start, end) {
+      // 桃園大溪／復興一帶 ↔ 宜蘭平原：北橫台7 常是合理選項但比國道慢很多
+      const daxiSide = [24.72, 121.18, 25.02, 121.48];
+      const yilanSide = [24.52, 121.55, 24.92, 121.95];
+      return (
+        (inBBox(start, daxiSide) && inBBox(end, yilanSide)) ||
+        (inBBox(end, daxiSide) && inBBox(start, yilanSide))
+      );
+    }
+
     async function fetchRouteCandidates(start, end, mode) {
       const locations = [start, end];
       const collected = [];
@@ -1526,16 +1570,46 @@
       } catch (err) {
         console.warn("Valhalla candidates failed", err);
       }
+
+      // 汽車：額外抓「避開國道」候選（否則像大溪→宜蘭的台7/北橫永遠不會進備選）
       if (mode === "car") {
+        try {
+          collected.push(
+            ...(await fetchValhallaRoutes(locations, "car", 1, {
+              costingOptions: { use_highways: 0, use_tolls: 0.2, top_speed: 90 },
+              meta: { preferScenic: true, labelHint: "" },
+            }))
+          );
+        } catch (err) {
+          console.warn("Valhalla scenic candidates failed", err);
+        }
         try {
           collected.push(...(await fetchOsrmRoutes(locations, 3)));
         } catch (err) {
           console.warn("OSRM candidates failed", err);
         }
+        if (shouldOfferTw7(start, end)) {
+          try {
+            const via = { lat: 24.6103, lon: 121.5248, name: "栖蘭（台7）" };
+            const viaRoutes = await fetchValhallaRoutes([start, via, end], "car", 0, {
+              costingOptions: { use_highways: 0, use_tolls: 0.2 },
+              meta: { preferScenic: true, labelHint: "北橫／台7" },
+            });
+            collected.push(...viaRoutes);
+          } catch (err) {
+            console.warn("TW7 via candidate failed", err);
+          }
+        }
       }
-      const unique = dedupeRoutes(collected, 4);
+
+      let unique = dedupeRoutes(collected, 5);
+      // 確保至少保留一條非國道路線（若有）
+      const scenic = collected.filter((r) => r.hasHighway === false || r.preferScenic || r.labelHint);
+      if (scenic.length) {
+        const keep = dedupeRoutes([...unique, ...scenic], 6);
+        unique = keep;
+      }
       if (!unique.length) {
-        // last resort single fetch path
         if (mode === "scooter") {
           const one = await fetchValhallaRoutes(locations, "scooter", 0);
           return dedupeRoutes(one, 1);
@@ -1829,14 +1903,9 @@ out center 400;
         btn.className = "route-option" + (idx === selectedIndex ? " active" : "");
         btn.disabled = !!state.routeSwitching;
         const shown = opt.baseRoute;
-        const hwy =
-          shown.hasHighway === true
-            ? "含國道"
-            : shown.hasHighway === false
-              ? "避開國道"
-              : "路徑";
+        const style = routeStyleLabel(shown);
         btn.innerHTML = `<span class="t">路線 ${idx + 1} · ${formatKm(shown.distanceKm)} · ${formatDuration(shown.durationSec)}</span>
-          <span class="d">${hwy} · 預估停靠 ${opt.stops.length} 站 · ${shown.engine}</span>`;
+          <span class="d">${style} · 預估停靠 ${opt.stops.length} 站 · ${shown.engine}</span>`;
         btn.addEventListener("click", () => {
           if (state.selectedRouteIndex === idx || state.routeSwitching) return;
           applyRouteOption(idx);
