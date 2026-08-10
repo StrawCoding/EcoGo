@@ -12,7 +12,7 @@
 - 汽車／機車模式（機車：Valhalla `motor_scooter`，排除國道／快速道路）
 - 各站類型獨立間隔（例：Ionex 每 40 km）
 - 規劃後直開 Google Maps（含 waypoints，免費深連結）
-- 站點資料：沿線示範站點，或優先 OpenStreetMap Overpass
+- 站點資料：預設 **Ionex 官方地圖快取**（`api.ionex.com.tw/location`，與 [map.ionex.com.tw](https://map.ionex.com.tw/) 同源）、可改 OSM Overpass，或沿線示範站點
 
 ## 使用
 
@@ -42,6 +42,17 @@ python3 -m http.server 8080
 # 開啟 http://127.0.0.1:8080/
 ```
 
+### 更新 Ionex 站點快取
+
+地圖站點來自 Ionex 公開 location API（與 [map.ionex.com.tw](https://map.ionex.com.tw/) 同源）。定期執行：
+
+```bash
+python3 scripts/sync_ionex_stations.py
+# 產出 data/stations-ionex.json，並同步到部署目錄（若存在）
+```
+
+建議 cron 每日一次。Gogoro 暫無同等公開來源時，可併用 OSM 或示範站。
+
 ## 技術
 
 | 項目 | 作法（免費開源） |
@@ -52,7 +63,7 @@ python3 -m http.server 8080
 | 地址 | 別名／座標／Photon／Nominatim（含結構化） |
 | 選站 | 沿路徑依間隔找最近站，再以 waypoints 精算 |
 | 匯出 | Google Maps `/dir/` 深連結（免金鑰） |
-| 站點備援 | OSM Overpass（可選）／內建沿線示範資料 |
+| 站點 | Ionex 官方地圖預抓快取；OSM／示範站備援 |
 
 公開服務來源：
 
@@ -60,6 +71,7 @@ python3 -m http.server 8080
 - OSRM：`router.project-osrm.org`
 - Photon：`photon.komoot.io`
 - Nominatim：`nominatim.openstreetmap.org`
+- Ionex 站點：`api.ionex.com.tw/location`（官網地圖同源）
 
 請遵守各服務的使用規範與公平使用；重度自架建議自行部署 Valhalla／OSRM。
 
