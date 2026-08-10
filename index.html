@@ -1,0 +1,1399 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EcoGo · 換電／加油間隔路線規劃</title>
+  <meta name="description" content="EcoGo：用 Google Maps 依 Ionex、Gogoro 換電站與加油站間隔，規劃最適路線並一鍵開啟 Google Maps。" />
+  <link rel="canonical" href="https://ecogo.wastebase.xyz/" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0e1412;
+      --bg-2: #16201c;
+      --panel: #1a2621;
+      --line: #2c3d35;
+      --text: #e7efe9;
+      --muted: #8aa396;
+      --ionex: #2ec4b6;
+      --gogoro: #6fbf73;
+      --gas: #e0a045;
+      --route: #4285f4;
+      --danger: #e07171;
+      --ok: #5dcf8a;
+      --maps: #4285f4;
+      --shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+      --radius: 14px;
+      --font: "IBM Plex Sans", "Noto Sans TC", sans-serif;
+      --display: "Space Grotesk", "IBM Plex Sans", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: var(--font);
+      color: var(--text);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1c3a32 0%, transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, #1a2740 0%, transparent 45%),
+        linear-gradient(160deg, #0c1210, #121a17 40%, #0e1412);
+      overflow: hidden;
+    }
+    .app {
+      display: grid;
+      grid-template-columns: minmax(320px, 430px) 1fr;
+      height: 100%;
+    }
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 18px 16px 16px;
+      border-right: 1px solid var(--line);
+      background: color-mix(in srgb, var(--bg-2) 88%, transparent);
+      backdrop-filter: blur(8px);
+      overflow: auto;
+      z-index: 2;
+    }
+    .brand { display: grid; gap: 4px; padding: 4px 4px 8px; }
+    .brand h1 {
+      margin: 0;
+      font-family: var(--display);
+      font-size: 1.35rem;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+    }
+    .brand p { margin: 0; color: var(--muted); font-size: 0.86rem; line-height: 1.45; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      box-shadow: var(--shadow);
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 0.78rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    label.field {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 10px;
+      font-size: 0.84rem;
+      color: var(--muted);
+    }
+    label.field:last-child { margin-bottom: 0; }
+    input[type="text"], input[type="number"], input[type="password"], select {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #101815;
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font: inherit;
+      outline: none;
+    }
+    input:focus, select:focus {
+      border-color: color-mix(in srgb, var(--maps) 65%, var(--line));
+    }
+    .key-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+    .picked {
+      display: none;
+      margin-top: 6px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: #121b17;
+      border: 1px solid var(--line);
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+    .picked.show { display: block; }
+    .picked strong { color: var(--text); font-weight: 600; }
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .mode-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .mode-btn {
+      border: 1px solid var(--line);
+      background: #121b17;
+      color: var(--muted);
+      border-radius: 12px;
+      padding: 12px 10px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: left;
+    }
+    .mode-btn .t { display: block; color: var(--text); font-size: 0.95rem; }
+    .mode-btn .d { display: block; margin-top: 4px; font-size: 0.72rem; font-weight: 500; line-height: 1.35; }
+    .mode-btn.active {
+      border-color: color-mix(in srgb, var(--maps) 55%, var(--line));
+      background: color-mix(in srgb, var(--maps) 12%, #121b17);
+      color: #8ab4f8;
+    }
+    .pin-row, .maps-row, .presets {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .presets { grid-template-columns: 1fr 1fr 1fr; }
+    .presets button, .btn-ghost, .btn-primary, .btn-maps, .btn-load {
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #121b17;
+      color: var(--text);
+      font: inherit;
+      font-weight: 600;
+      padding: 10px 12px;
+      cursor: pointer;
+    }
+    .presets button { font-size: 0.78rem; padding: 8px 6px; color: var(--muted); }
+    .presets button:hover { color: var(--text); border-color: color-mix(in srgb, var(--maps) 40%, var(--line)); }
+    .btn-primary {
+      width: 100%;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      border-color: transparent;
+      color: #fff;
+      padding: 12px 14px;
+      font-size: 0.95rem;
+    }
+    .btn-primary:disabled, .btn-maps:disabled, .btn-ghost:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-maps {
+      background: color-mix(in srgb, var(--maps) 18%, #121b17);
+      border-color: color-mix(in srgb, var(--maps) 45%, var(--line));
+      color: #8ab4f8;
+    }
+    .btn-load {
+      background: color-mix(in srgb, var(--ionex) 16%, #121b17);
+      border-color: color-mix(in srgb, var(--ionex) 40%, var(--line));
+      color: var(--ionex);
+      white-space: nowrap;
+    }
+    .station-type { display: grid; gap: 10px; }
+    .stype {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #121b17;
+    }
+    .stype.on-ionex { border-color: color-mix(in srgb, var(--ionex) 45%, var(--line)); }
+    .stype.on-gogoro { border-color: color-mix(in srgb, var(--gogoro) 45%, var(--line)); }
+    .stype.on-gas { border-color: color-mix(in srgb, var(--gas) 45%, var(--line)); }
+    .swatch { width: 12px; height: 12px; border-radius: 999px; display: inline-block; }
+    .swatch.ionex { background: var(--ionex); }
+    .swatch.gogoro { background: var(--gogoro); }
+    .swatch.gas { background: var(--gas); }
+    .name { color: var(--text); font-weight: 600; font-size: 0.9rem; }
+    .meta { color: var(--muted); font-size: 0.72rem; margin-top: 3px; display: flex; gap: 6px; align-items: center; }
+    .stype input[type="number"] { width: 72px; text-align: center; padding: 8px; }
+    .note { margin: 10px 0 0; color: var(--muted); font-size: 0.75rem; line-height: 1.45; }
+    .actions { display: grid; gap: 8px; }
+    .status {
+      font-size: 0.82rem;
+      line-height: 1.45;
+      color: var(--muted);
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: #121b17;
+      border: 1px solid var(--line);
+    }
+    .status.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
+    .status.err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); }
+    .summary {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .metric {
+      background: #121b17;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+    }
+    .metric .k { color: var(--muted); font-size: 0.72rem; }
+    .metric .v { margin-top: 4px; font-weight: 700; font-size: 0.95rem; }
+    .itinerary { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+    .itinerary li {
+      display: grid;
+      grid-template-columns: 28px 1fr auto;
+      gap: 10px;
+      align-items: start;
+      padding: 10px;
+      border-radius: 12px;
+      background: #121b17;
+      border: 1px solid var(--line);
+    }
+    .badge {
+      width: 28px; height: 28px; border-radius: 9px;
+      display: grid; place-items: center;
+      font-size: 0.72rem; font-weight: 700; color: #04110e;
+    }
+    .it-title { font-weight: 600; font-size: 0.86rem; }
+    .it-sub { color: var(--muted); font-size: 0.72rem; margin-top: 3px; line-height: 1.35; }
+    .it-km { color: var(--muted); font-size: 0.75rem; white-space: nowrap; }
+    .gmaps-url {
+      display: none;
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 12px;
+      background: #101815;
+      border: 1px dashed var(--line);
+      font-size: 0.72rem;
+      color: var(--muted);
+      word-break: break-all;
+      line-height: 1.4;
+    }
+    .gmaps-url.show { display: block; }
+    .map-wrap { position: relative; min-height: 100%; }
+    #map { position: absolute; inset: 0; background: #0b1210; }
+    .map-hint {
+      display: none;
+      position: absolute;
+      top: 14px; left: 50%;
+      transform: translateX(-50%);
+      z-index: 5;
+      background: rgba(16, 24, 21, 0.92);
+      border: 1px solid var(--line);
+      color: var(--text);
+      padding: 8px 14px;
+      border-radius: 999px;
+      font-size: 0.82rem;
+      box-shadow: var(--shadow);
+    }
+    .map-hint.show { display: block; }
+    .map-legend {
+      position: absolute;
+      left: 12px; bottom: 12px;
+      z-index: 5;
+      display: flex; gap: 10px; flex-wrap: wrap;
+      background: rgba(16, 24, 21, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 8px 10px;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .map-legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .map-legend i { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
+    .gate {
+      position: absolute; inset: 0; z-index: 4;
+      display: grid; place-items: center;
+      background: rgba(8, 12, 11, 0.72);
+      padding: 24px;
+      text-align: center;
+    }
+    .gate.hidden { display: none; }
+    .gate-box {
+      max-width: 420px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 22px;
+      box-shadow: var(--shadow);
+    }
+    .gate-box h3 { margin: 0 0 8px; font-family: var(--display); }
+    .gate-box p { margin: 0; color: var(--muted); font-size: 0.86rem; line-height: 1.5; }
+    .pac-container {
+      z-index: 10000 !important;
+      background: #101815 !important;
+      border: 1px solid #2c3d35 !important;
+      border-radius: 12px !important;
+      margin-top: 4px;
+      box-shadow: var(--shadow) !important;
+      font-family: var(--font) !important;
+    }
+    .pac-item {
+      border-top: 1px solid #2c3d35 !important;
+      color: #e7efe9 !important;
+      padding: 8px 12px !important;
+      line-height: 1.35 !important;
+    }
+    .pac-item:hover, .pac-item-selected { background: #1a2b24 !important; }
+    .pac-item-query, .pac-matched { color: #e7efe9 !important; }
+    .pac-icon { display: none !important; }
+    @media (max-width: 900px) {
+      body { overflow: auto; }
+      .app {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto minmax(55vh, 1fr);
+        height: auto; min-height: 100%;
+      }
+      .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
+      .map-wrap { min-height: 55vh; position: relative; }
+      #map { position: absolute; inset: 0; min-height: 55vh; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <h1>EcoGo</h1>
+        <p>Google Maps 路線引擎 · Ionex／Gogoro／加油站間隔選站 · 一鍵開啟 Maps。</p>
+      </div>
+
+      <section class="card">
+        <h2>Google Maps API</h2>
+        <div class="key-row">
+          <label class="field" style="margin:0">API Key
+            <input id="apiKey" type="password" placeholder="貼上你的 Google Maps API Key" autocomplete="off" />
+          </label>
+          <button type="button" class="btn-load" id="loadMapsBtn">載入</button>
+        </div>
+        <p class="note">需啟用：Maps JavaScript API、Places API、Directions API。金鑰僅存本機 localStorage，不會上傳。</p>
+      </section>
+
+      <section class="card">
+        <h2>交通模式</h2>
+        <div class="mode-grid" role="radiogroup" aria-label="交通模式">
+          <button type="button" class="mode-btn active" data-mode="car" id="modeCar">
+            <span class="t">汽車</span>
+            <span class="d">Google DRIVING，可用國道／快速道路</span>
+          </button>
+          <button type="button" class="mode-btn" data-mode="scooter" id="modeScooter">
+            <span class="t">機車</span>
+            <span class="d">Google 避開 highways／tolls（國道／收費快速）</span>
+          </button>
+        </div>
+        <p class="note" id="modeNote">汽車模式：Google Maps Directions DRIVING。</p>
+      </section>
+
+      <section class="card">
+        <h2>自選地址</h2>
+        <label class="field">起點
+          <input id="start" type="text" placeholder="輸入地址或地名，例如：台北車站" autocomplete="off" disabled />
+          <div class="picked" id="startPicked"></div>
+        </label>
+        <label class="field">終點
+          <input id="end" type="text" placeholder="輸入地址或地名，例如：台中火車站" autocomplete="off" disabled />
+          <div class="picked" id="endPicked"></div>
+        </label>
+        <div class="pin-row">
+          <button type="button" class="btn-ghost" id="pinStartBtn" disabled>地圖點選起點</button>
+          <button type="button" class="btn-ghost" id="pinEndBtn" disabled>地圖點選終點</button>
+        </div>
+        <div class="presets" aria-label="常用路線">
+          <button type="button" data-preset="taipei-taichung" disabled>台北 → 台中</button>
+          <button type="button" data-preset="taipei-hsinchu" disabled>台北 → 新竹</button>
+          <button type="button" data-preset="kaohsiung-tainan" disabled>高雄 → 台南</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>站點間隔</h2>
+        <div class="station-type" id="types">
+          <div class="stype on-ionex" data-type="ionex">
+            <input type="checkbox" id="use-ionex" checked />
+            <div>
+              <div class="name">Ionex 換電站</div>
+              <div class="meta"><i class="swatch ionex"></i>每隔幾公里找一站</div>
+            </div>
+            <input type="number" id="km-ionex" min="5" max="200" step="1" value="40" aria-label="Ionex 間隔公里" />
+          </div>
+          <div class="stype on-gogoro" data-type="gogoro">
+            <input type="checkbox" id="use-gogoro" checked />
+            <div>
+              <div class="name">Gogoro 換電站</div>
+              <div class="meta"><i class="swatch gogoro"></i>每隔幾公里找一站</div>
+            </div>
+            <input type="number" id="km-gogoro" min="5" max="200" step="1" value="50" aria-label="Gogoro 間隔公里" />
+          </div>
+          <div class="stype on-gas" data-type="gas">
+            <input type="checkbox" id="use-gas" />
+            <div>
+              <div class="name">加油站</div>
+              <div class="meta"><i class="swatch gas"></i>每隔幾公里找一站</div>
+            </div>
+            <input type="number" id="km-gas" min="5" max="200" step="1" value="80" aria-label="加油站間隔公里" />
+          </div>
+        </div>
+        <div class="row-2" style="margin-top:12px">
+          <label class="field">搜尋廊道 (km)
+            <input id="corridor" type="number" min="0.5" max="10" step="0.5" value="2.5" />
+          </label>
+          <label class="field">站點資料
+            <select id="dataMode">
+              <option value="demo">沿線示範站點</option>
+              <option value="osm">優先 OSM 即時</option>
+            </select>
+          </label>
+        </div>
+        <p class="note">例：Ionex 設 40 → 沿 Google 路線約每 40km 選最靠近的站，再組成可直開的 Maps 導航連結。</p>
+      </section>
+
+      <div class="actions">
+        <button class="btn-primary" id="planBtn" type="button" disabled>用 Google Maps 規劃</button>
+        <div class="maps-row">
+          <button class="btn-maps" id="openMapsBtn" type="button" disabled>開啟 Google Maps</button>
+          <button class="btn-ghost" id="copyMapsBtn" type="button" disabled>複製 Maps 連結</button>
+        </div>
+        <button class="btn-ghost" id="clearBtn" type="button" disabled>清除結果</button>
+        <div class="status" id="status">請先載入 Google Maps API Key。</div>
+      </div>
+
+      <section class="card">
+        <h2>開源</h2>
+        <p class="note" style="margin:0">MIT License · 託管於 <a href="https://ecogo.wastebase.xyz/" style="color:var(--ionex)">ecogo.wastebase.xyz</a><br />
+        原始碼：<a id="githubLink" href="https://github.com/StrawCoding/EcoGo" target="_blank" rel="noopener" style="color:var(--maps)">github.com/StrawCoding/EcoGo</a></p>
+      </section>
+
+      <section class="card" id="resultCard" hidden>
+        <h2>規劃結果</h2>
+        <div class="summary">
+          <div class="metric"><div class="k">總里程</div><div class="v" id="mDistance">—</div></div>
+          <div class="metric"><div class="k">預估時間</div><div class="v" id="mDuration">—</div></div>
+          <div class="metric"><div class="k">停靠站數</div><div class="v" id="mStops">—</div></div>
+          <div class="metric"><div class="k">最大間距</div><div class="v" id="mGap">—</div></div>
+        </div>
+        <ol class="itinerary" id="itinerary"></ol>
+        <div class="gmaps-url" id="gmapsUrl"></div>
+      </section>
+    </aside>
+
+    <main class="map-wrap">
+      <div id="map"></div>
+      <div class="gate" id="mapGate">
+        <div class="gate-box">
+          <h3>等待 Google Maps</h3>
+          <p>在左側貼上 API Key 並按「載入」，即可使用 Google 路線、地址自動完成與地圖。</p>
+        </div>
+      </div>
+      <div class="map-hint" id="mapHint">在地圖上點一下設定起點</div>
+      <div class="map-legend">
+        <span><i style="background:var(--route)"></i>Google 路線</span>
+        <span><i style="background:var(--ionex)"></i>Ionex</span>
+        <span><i style="background:var(--gogoro)"></i>Gogoro</span>
+        <span><i style="background:var(--gas)"></i>加油站</span>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const STORAGE_KEY = "ecogo-gmaps-key";
+    const OVERPASS_ENDPOINTS = [
+      "https://overpass.kumi.systems/api/interpreter",
+      "https://overpass-api.de/api/interpreter",
+      "https://overpass.osm.ch/api/interpreter",
+    ];
+    const PRESETS = {
+      "taipei-taichung": {
+        start: { name: "台北車站", query: "台北車站" },
+        end: { name: "台中火車站", query: "台中火車站" },
+      },
+      "taipei-hsinchu": {
+        start: { name: "台北車站", query: "台北車站" },
+        end: { name: "新竹火車站", query: "新竹火車站" },
+      },
+      "kaohsiung-tainan": {
+        start: { name: "高雄火車站", query: "高雄火車站" },
+        end: { name: "台南火車站", query: "台南火車站" },
+      },
+    };
+
+    const state = {
+      ready: false,
+      mode: "car",
+      start: null,
+      end: null,
+      pinMode: null,
+      lastPlan: null,
+      map: null,
+      directionsService: null,
+      directionsRenderer: null,
+      geocoder: null,
+      markers: [],
+      candidateMarkers: [],
+      startMarker: null,
+      endMarker: null,
+      autocomplete: { start: null, end: null },
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $("status");
+    const planBtn = $("planBtn");
+
+    function setStatus(msg, kind = "") {
+      statusEl.className = "status" + (kind ? " " + kind : "");
+      statusEl.textContent = msg;
+    }
+
+    function haversineKm(a, b) {
+      const R = 6371;
+      const toRad = (d) => d * Math.PI / 180;
+      const dLat = toRad(b[0] - a[0]);
+      const dLon = toRad(b[1] - a[1]);
+      const lat1 = toRad(a[0]);
+      const lat2 = toRad(b[0]);
+      const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(h));
+    }
+
+    function formatKm(km) {
+      return (Math.round(km * 10) / 10).toFixed(1) + " km";
+    }
+
+    function formatDuration(sec) {
+      const h = Math.floor(sec / 3600);
+      const m = Math.round((sec % 3600) / 60);
+      if (h <= 0) return `${m} 分`;
+      return `${h} 時 ${m} 分`;
+    }
+
+    function typeLabel(type) {
+      return ({ ionex: "Ionex 換電站", gogoro: "Gogoro 換電站", gas: "加油站", start: "起點", end: "終點" })[type] || type;
+    }
+
+    function typeColor(type) {
+      return ({ ionex: "#2ec4b6", gogoro: "#6fbf73", gas: "#e0a045", start: "#4285f4", end: "#ea4335" })[type] || "#9ec5b8";
+    }
+
+    function showPicked(which, place) {
+      const el = $(which + "Picked");
+      if (!place) {
+        el.classList.remove("show");
+        el.innerHTML = "";
+        return;
+      }
+      el.classList.add("show");
+      el.innerHTML = `<strong>${place.name}</strong><br>${place.lat.toFixed(5)}, ${place.lon.toFixed(5)}`;
+    }
+
+    function setPlace(which, place, fillInput = true) {
+      state[which] = place;
+      if (fillInput) $(which).value = place.name || place.full || "";
+      showPicked(which, place);
+      syncEndpointMarker(which, place);
+    }
+
+    function setMapsButtons(on) {
+      $("openMapsBtn").disabled = !on;
+      $("copyMapsBtn").disabled = !on;
+    }
+
+    function setMode(mode) {
+      state.mode = mode;
+      $("modeCar").classList.toggle("active", mode === "car");
+      $("modeScooter").classList.toggle("active", mode === "scooter");
+      $("modeNote").textContent = mode === "scooter"
+        ? "機車模式：Google Directions DRIVING + avoid highways／tolls，排除國道與收費快速道路。"
+        : "汽車模式：Google Maps Directions DRIVING，允許國道／快速道路。";
+    }
+
+    function getApiKey() {
+      const fromInput = $("apiKey").value.trim();
+      if (fromInput) return fromInput;
+      const params = new URLSearchParams(location.search);
+      return params.get("key") || localStorage.getItem(STORAGE_KEY) || "";
+    }
+
+    function saveApiKey(key) {
+      localStorage.setItem(STORAGE_KEY, key);
+      $("apiKey").value = key;
+    }
+
+    function loadGoogleMaps(key) {
+      return new Promise((resolve, reject) => {
+        if (window.google && google.maps && google.maps.Map) {
+          resolve();
+          return;
+        }
+        const existing = document.getElementById("gmaps-sdk");
+        if (existing) existing.remove();
+        const cbName = "__gmapsReady_" + Date.now();
+        window[cbName] = () => {
+          delete window[cbName];
+          resolve();
+        };
+        const script = document.createElement("script");
+        script.id = "gmaps-sdk";
+        script.async = true;
+        script.defer = true;
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&libraries=places&language=zh-TW&region=TW&callback=${cbName}`;
+        script.onerror = () => reject(new Error("無法載入 Google Maps SDK，請檢查網路或金鑰。"));
+        document.head.appendChild(script);
+        setTimeout(() => {
+          if (!(window.google && google.maps)) {
+            reject(new Error("Google Maps 載入逾時。請確認金鑰已啟用 Maps JavaScript API。"));
+          }
+        }, 15000);
+      });
+    }
+
+    function enableUi(on) {
+      ["start", "end", "pinStartBtn", "pinEndBtn", "planBtn", "clearBtn"].forEach((id) => {
+        $(id).disabled = !on;
+      });
+      document.querySelectorAll("[data-preset]").forEach((btn) => { btn.disabled = !on; });
+      $("mapGate").classList.toggle("hidden", on);
+    }
+
+    function initMap() {
+      state.map = new google.maps.Map($("map"), {
+        center: { lat: 23.7, lng: 120.9 },
+        zoom: 8,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: false,
+        clickableIcons: false,
+        styles: [
+          { elementType: "geometry", stylers: [{ color: "#1a2420" }] },
+          { elementType: "labels.text.stroke", stylers: [{ color: "#1a2420" }] },
+          { elementType: "labels.text.fill", stylers: [{ color: "#8aa396" }] },
+          { featureType: "road", elementType: "geometry", stylers: [{ color: "#2a3832" }] },
+          { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#3a4f46" }] },
+          { featureType: "water", elementType: "geometry", stylers: [{ color: "#0e1a24" }] },
+          { featureType: "poi", stylers: [{ visibility: "off" }] },
+          { featureType: "transit", stylers: [{ visibility: "off" }] },
+        ],
+      });
+
+      state.directionsService = new google.maps.DirectionsService();
+      state.directionsRenderer = new google.maps.DirectionsRenderer({
+        map: state.map,
+        suppressMarkers: true,
+        preserveViewport: false,
+        polylineOptions: {
+          strokeColor: "#4285f4",
+          strokeOpacity: 0.9,
+          strokeWeight: 5,
+        },
+      });
+      state.geocoder = new google.maps.Geocoder();
+
+      state.map.addListener("click", async (e) => {
+        if (!state.pinMode) return;
+        const which = state.pinMode;
+        state.pinMode = null;
+        $("mapHint").classList.remove("show");
+        const lat = e.latLng.lat();
+        const lon = e.latLng.lng();
+        try {
+          const place = await reverseGeocode(lat, lon);
+          setPlace(which, place, true);
+          setStatus(`已設定${which === "start" ? "起點" : "終點"}：${place.name}`);
+        } catch (err) {
+          setPlace(which, { name: `${lat.toFixed(5)}, ${lon.toFixed(5)}`, full: `${lat},${lon}`, lat, lon }, true);
+        }
+      });
+
+      wireAutocomplete("start", "start");
+      wireAutocomplete("end", "end");
+      state.ready = true;
+      enableUi(true);
+      setStatus("Google Maps 已就緒。輸入地址或點選地圖後即可規劃。", "ok");
+    }
+
+    function wireAutocomplete(inputId, which) {
+      const input = $(inputId);
+      const ac = new google.maps.places.Autocomplete(input, {
+        fields: ["geometry", "name", "formatted_address", "place_id"],
+        componentRestrictions: { country: "tw" },
+      });
+      ac.bindTo("bounds", state.map);
+      state.autocomplete[which] = ac;
+      ac.addListener("place_changed", () => {
+        const place = ac.getPlace();
+        if (!place.geometry || !place.geometry.location) {
+          setStatus("請從建議清單選擇完整地址。", "err");
+          return;
+        }
+        const lat = place.geometry.location.lat();
+        const lon = place.geometry.location.lng();
+        setPlace(which, {
+          name: place.name || place.formatted_address || input.value,
+          full: place.formatted_address || place.name || input.value,
+          lat,
+          lon,
+          placeId: place.place_id || null,
+        }, true);
+        state.map.panTo({ lat, lng: lon });
+        if (state.map.getZoom() < 12) state.map.setZoom(13);
+      });
+    }
+
+    function reverseGeocode(lat, lon) {
+      return new Promise((resolve, reject) => {
+        state.geocoder.geocode({ location: { lat, lng: lon } }, (results, status) => {
+          if (status !== "OK" || !results || !results[0]) {
+            reject(new Error("反向地理編碼失敗：" + status));
+            return;
+          }
+          const r = results[0];
+          resolve({
+            name: r.address_components?.[0]?.long_name || r.formatted_address,
+            full: r.formatted_address,
+            lat,
+            lon,
+            placeId: r.place_id || null,
+          });
+        });
+      });
+    }
+
+    function geocodeQuery(query) {
+      return new Promise((resolve, reject) => {
+        state.geocoder.geocode({ address: query, componentRestrictions: { country: "TW" } }, (results, status) => {
+          if (status !== "OK" || !results || !results[0]) {
+            reject(new Error(`找不到「${query}」（${status}）`));
+            return;
+          }
+          const r = results[0];
+          const loc = r.geometry.location;
+          resolve({
+            name: r.address_components?.[0]?.long_name || query,
+            full: r.formatted_address,
+            lat: loc.lat(),
+            lon: loc.lng(),
+            placeId: r.place_id || null,
+          });
+        });
+      });
+    }
+
+    function syncEndpointMarker(which, place) {
+      const key = which + "Marker";
+      if (state[key]) {
+        state[key].setMap(null);
+        state[key] = null;
+      }
+      if (!place || !state.map) return;
+      state[key] = new google.maps.Marker({
+        map: state.map,
+        position: { lat: place.lat, lng: place.lon },
+        title: place.name,
+        label: {
+          text: which === "start" ? "起" : "終",
+          color: "#fff",
+          fontWeight: "700",
+        },
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 10,
+          fillColor: which === "start" ? "#4285f4" : "#ea4335",
+          fillOpacity: 1,
+          strokeColor: "#fff",
+          strokeWeight: 2,
+        },
+      });
+    }
+
+    function clearOverlayMarkers() {
+      for (const m of state.markers) m.setMap(null);
+      for (const m of state.candidateMarkers) m.setMap(null);
+      state.markers = [];
+      state.candidateMarkers = [];
+    }
+
+    function buildRouteMetrics(latlngs) {
+      const cum = [0];
+      for (let i = 1; i < latlngs.length; i++) {
+        cum.push(cum[i - 1] + haversineKm(latlngs[i - 1], latlngs[i]));
+      }
+      return { cum, totalKm: cum[cum.length - 1] || 0 };
+    }
+
+    function pointAtDistance(latlngs, cum, targetKm) {
+      if (targetKm <= 0) return { latlng: latlngs[0], index: 0 };
+      let i = 1;
+      while (i < cum.length && cum[i] < targetKm) i++;
+      if (i >= cum.length) return { latlng: latlngs[latlngs.length - 1], index: latlngs.length - 1 };
+      const t0 = cum[i - 1];
+      const t1 = cum[i];
+      const ratio = (targetKm - t0) / Math.max(t1 - t0, 1e-9);
+      const a = latlngs[i - 1];
+      const b = latlngs[i];
+      return {
+        latlng: [a[0] + (b[0] - a[0]) * ratio, a[1] + (b[1] - a[1]) * ratio],
+        index: i,
+      };
+    }
+
+    function extractPathFromResult(result) {
+      const latlngs = [];
+      let distanceM = 0;
+      let durationSec = 0;
+      for (const leg of result.routes[0].legs) {
+        distanceM += leg.distance.value;
+        durationSec += leg.duration.value;
+        for (const step of leg.steps) {
+          const path = step.path || [];
+          for (const p of path) latlngs.push([p.lat(), p.lng()]);
+        }
+      }
+      if (!latlngs.length && result.routes[0].overview_path) {
+        for (const p of result.routes[0].overview_path) latlngs.push([p.lat(), p.lng()]);
+      }
+      return {
+        latlngs,
+        distanceKm: distanceM / 1000,
+        durationSec,
+        summary: result.routes[0].summary || "",
+        warnings: result.routes[0].warnings || [],
+      };
+    }
+
+    function requestDirections(origin, destination, mode, waypoints = []) {
+      return new Promise((resolve, reject) => {
+        const req = {
+          origin,
+          destination,
+          travelMode: google.maps.TravelMode.DRIVING,
+          provideRouteAlternatives: false,
+          region: "TW",
+          drivingOptions: {
+            departureTime: new Date(),
+          },
+        };
+        if (mode === "scooter") {
+          req.avoidHighways = true;
+          req.avoidTolls = true;
+        }
+        if (waypoints.length) {
+          req.waypoints = waypoints.map((w) => ({
+            location: { lat: w.lat, lng: w.lon },
+            stopover: true,
+          }));
+          req.optimizeWaypoints = false;
+        }
+        state.directionsService.route(req, (result, status) => {
+          if (status !== "OK") {
+            reject(new Error("Google Directions 失敗：" + status));
+            return;
+          }
+          resolve(result);
+        });
+      });
+    }
+
+    async function fetchGoogleRoute(start, end, mode, stops = []) {
+      const origin = start.placeId
+        ? { placeId: start.placeId }
+        : { lat: start.lat, lng: start.lon };
+      const destination = end.placeId
+        ? { placeId: end.placeId }
+        : { lat: end.lat, lng: end.lon };
+
+      const result = await requestDirections(origin, destination, mode, stops);
+      state.directionsRenderer.setDirections(result);
+      const parsed = extractPathFromResult(result);
+      return {
+        ...parsed,
+        engine: "google-maps-directions",
+        mode,
+        avoided: mode === "scooter" ? ["highways", "tolls"] : [],
+        raw: result,
+      };
+    }
+
+    function classifyStation(tags) {
+      const blob = [
+        tags.brand, tags.name, tags.operator, tags.network, tags["name:en"], tags.amenity,
+      ].filter(Boolean).join(" ").toLowerCase();
+      if (blob.includes("ionex") || blob.includes("光陽")) return "ionex";
+      if (blob.includes("gogoro")) return "gogoro";
+      if (tags.amenity === "fuel" || blob.includes("加油站") || blob.includes("gas")) return "gas";
+      if (tags.amenity === "charging_station") return "ionex";
+      return null;
+    }
+
+    function routeBBox(latlngs, padDeg = 0.08) {
+      let s = 90, n = -90, w = 180, e = -180;
+      for (const [lat, lon] of latlngs) {
+        s = Math.min(s, lat); n = Math.max(n, lat);
+        w = Math.min(w, lon); e = Math.max(e, lon);
+      }
+      return [s - padDeg, w - padDeg, n + padDeg, e + padDeg];
+    }
+
+    function parseOverpassStations(data) {
+      const seen = new Set();
+      const stations = [];
+      for (const el of data.elements || []) {
+        if (el.type !== "node" || el.lat == null || el.lon == null) continue;
+        const tags = el.tags || {};
+        const type = classifyStation(tags);
+        if (!type) continue;
+        const id = `osm-${el.id}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        stations.push({
+          id,
+          type,
+          name: tags.name || tags.brand || typeLabel(type),
+          lat: el.lat,
+          lon: el.lon,
+          source: "osm",
+        });
+      }
+      return stations;
+    }
+
+    async function fetchOverpass(query, timeoutMs = 8000) {
+      let lastErr = null;
+      for (const endpoint of OVERPASS_ENDPOINTS) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+        try {
+          const res = await fetch(endpoint, {
+            method: "POST",
+            body: query,
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            signal: ctrl.signal,
+          });
+          clearTimeout(timer);
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const text = await res.text();
+          return JSON.parse(text);
+        } catch (err) {
+          clearTimeout(timer);
+          lastErr = err;
+        }
+      }
+      throw lastErr || new Error("Overpass 全部失敗");
+    }
+
+    function buildDemoStations(latlngs, cum, totalKm) {
+      const stations = [];
+      const specs = [
+        { type: "ionex", every: 8, offset: 0.004, label: "Ionex 示範站" },
+        { type: "gogoro", every: 6, offset: -0.0035, label: "Gogoro 示範站" },
+        { type: "gas", every: 18, offset: 0.006, label: "示範加油站" },
+      ];
+      for (const spec of specs) {
+        let n = 1;
+        for (let d = spec.every * 0.35; d < totalKm; d += spec.every) {
+          const { latlng } = pointAtDistance(latlngs, cum, d);
+          const bearingJitter = ((n * 37) % 7) - 3;
+          stations.push({
+            id: `demo-${spec.type}-${n}`,
+            type: spec.type,
+            name: `${spec.label} ${n}`,
+            lat: latlng[0] + spec.offset + bearingJitter * 0.0004,
+            lon: latlng[1] + spec.offset * 0.8 + bearingJitter * 0.0003,
+            source: "demo",
+          });
+          n++;
+        }
+      }
+      return stations;
+    }
+
+    async function fetchStationsAlongRoute(latlngs, cum, corridorKm) {
+      if ($("dataMode").value === "osm") {
+        const [sLat, sLon, nLat, nLon] = routeBBox(latlngs, Math.max(0.05, corridorKm / 80));
+        const query = `
+          [out:json][timeout:12];
+          (
+            node["amenity"="charging_station"](${sLat},${sLon},${nLat},${nLon});
+            node["amenity"="fuel"](${sLat},${sLon},${nLat},${nLon});
+            node["brand"~"Gogoro|Ionex|ionex|光陽",i](${sLat},${sLon},${nLat},${nLon});
+            node["name"~"Gogoro|Ionex|ionex|換電站",i](${sLat},${sLon},${nLat},${nLon});
+          );
+          out body;
+        `;
+        try {
+          const data = await fetchOverpass(query, 9000);
+          const stations = parseOverpassStations(data);
+          if (stations.length >= 3) return { stations, mode: "osm" };
+        } catch (err) {
+          console.warn("Overpass failed", err);
+        }
+      }
+      return {
+        stations: buildDemoStations(latlngs, cum, cum[cum.length - 1]),
+        mode: "demo",
+      };
+    }
+
+    function projectStations(stations, latlngs, cum) {
+      return stations.map((s) => {
+        let best = { dist: Infinity, along: 0, routePt: latlngs[0] };
+        const step = Math.max(1, Math.floor(latlngs.length / 800));
+        for (let i = 0; i < latlngs.length; i += step) {
+          const d = haversineKm([s.lat, s.lon], latlngs[i]);
+          if (d < best.dist) best = { dist: d, along: cum[i], routePt: latlngs[i] };
+        }
+        return { ...s, offRouteKm: best.dist, alongKm: best.along };
+      }).filter((s) => Number.isFinite(s.alongKm));
+    }
+
+    function pickIntervalStops(projected, type, intervalKm, corridorKm, totalKm) {
+      const pool = projected
+        .filter((s) => s.type === type && s.offRouteKm <= corridorKm)
+        .sort((a, b) => a.alongKm - b.alongKm);
+      if (!pool.length || intervalKm <= 0) return [];
+
+      const targets = [];
+      for (let t = intervalKm; t < totalKm - intervalKm * 0.25; t += intervalKm) targets.push(t);
+      if (!targets.length && totalKm > intervalKm * 0.5) targets.push(totalKm / 2);
+
+      const picked = [];
+      const used = new Set();
+      for (const target of targets) {
+        let best = null;
+        for (const s of pool) {
+          if (used.has(s.id)) continue;
+          const score = Math.abs(s.alongKm - target) + s.offRouteKm * 0.35;
+          if (!best || score < best.score) best = { s, score };
+        }
+        if (best) {
+          used.add(best.s.id);
+          picked.push({ ...best.s, targetKm: target });
+        }
+      }
+      return picked;
+    }
+
+    function buildGoogleMapsUrl(start, end, stops, mode) {
+      const parts = [];
+      parts.push(`${start.lat},${start.lon}`);
+      for (const s of stops) parts.push(`${s.lat},${s.lon}`);
+      parts.push(`${end.lat},${end.lon}`);
+      const path = parts.map(encodeURIComponent).join("/");
+      const travelmode = "driving";
+      // dir URL opens Google Maps navigation-ready UI
+      let url = `https://www.google.com/maps/dir/${path}`;
+      // also provide api=1 form for copy-friendly deep link
+      const params = new URLSearchParams({
+        api: "1",
+        origin: `${start.lat},${start.lon}`,
+        destination: `${end.lat},${end.lon}`,
+        travelmode,
+      });
+      if (stops.length) {
+        params.set("waypoints", stops.map((s) => `${s.lat},${s.lon}`).join("|"));
+      }
+      if (mode === "scooter") {
+        // Google Maps URL has no avoidHighways flag; path already planned with avoid.
+        // Keep travelmode=driving; user sees the same waypoint chain.
+      }
+      return {
+        openUrl: url,
+        copyUrl: `https://www.google.com/maps/dir/?${params.toString()}`,
+      };
+    }
+
+    function renderResult({ start, end, route, stops, mode, dataMode }) {
+      clearOverlayMarkers();
+
+      for (const s of stops) {
+        const marker = new google.maps.Marker({
+          map: state.map,
+          position: { lat: s.lat, lng: s.lon },
+          title: s.name,
+          label: {
+            text: String(state.markers.length + 1),
+            color: "#04110e",
+            fontWeight: "700",
+            fontSize: "11px",
+          },
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 12,
+            fillColor: typeColor(s.type),
+            fillOpacity: 1,
+            strokeColor: "#0b1210",
+            strokeWeight: 2,
+          },
+        });
+        state.markers.push(marker);
+      }
+
+      syncEndpointMarker("start", start);
+      syncEndpointMarker("end", end);
+
+      const gaps = [];
+      let prevAlong = 0;
+      for (const s of stops) {
+        gaps.push(s.alongKm - prevAlong);
+        prevAlong = s.alongKm;
+      }
+      gaps.push(route.distanceKm - prevAlong);
+      const maxGap = gaps.length ? Math.max(...gaps) : route.distanceKm;
+
+      $("mDistance").textContent = formatKm(route.distanceKm);
+      $("mDuration").textContent = formatDuration(route.durationSec);
+      $("mStops").textContent = String(stops.length);
+      $("mGap").textContent = formatKm(maxGap);
+
+      const items = [
+        { kind: "start", name: start.name, sub: start.full || "", alongKm: 0 },
+        ...stops.map((s) => ({
+          kind: s.type,
+          name: s.name,
+          sub: `${typeLabel(s.type)} · 離路線 ${s.offRouteKm.toFixed(2)} km · 目標 ${formatKm(s.targetKm || s.alongKm)}`,
+          alongKm: s.alongKm,
+        })),
+        { kind: "end", name: end.name, sub: end.full || "", alongKm: route.distanceKm },
+      ];
+
+      $("itinerary").innerHTML = items.map((it, idx) => `
+        <li>
+          <div class="badge" style="background:${typeColor(it.kind)}">${idx === 0 ? "起" : idx === items.length - 1 ? "終" : idx}</div>
+          <div>
+            <div class="it-title">${it.name}</div>
+            <div class="it-sub">${it.sub}</div>
+          </div>
+          <div class="it-km">${formatKm(it.alongKm)}</div>
+        </li>
+      `).join("");
+
+      const urls = buildGoogleMapsUrl(start, end, stops, mode);
+      $("gmapsUrl").classList.add("show");
+      $("gmapsUrl").textContent = urls.copyUrl;
+      $("resultCard").hidden = false;
+      setMapsButtons(true);
+
+      state.lastPlan = { start, end, route, stops, mode, dataMode, urls };
+    }
+
+    function getTypeConfig() {
+      return [
+        { type: "ionex", enabled: $("use-ionex").checked, interval: +$("km-ionex").value },
+        { type: "gogoro", enabled: $("use-gogoro").checked, interval: +$("km-gogoro").value },
+        { type: "gas", enabled: $("use-gas").checked, interval: +$("km-gas").value },
+      ].filter((t) => t.enabled);
+    }
+
+    async function resolveEndpoint(which) {
+      if (state[which]) {
+        const input = $(which).value.trim();
+        if (input && (input === state[which].name || input === state[which].full)) {
+          return state[which];
+        }
+      }
+      const q = $(which).value.trim();
+      if (!q) throw new Error(which === "start" ? "請填寫起點。" : "請填寫終點。");
+      const place = await geocodeQuery(q);
+      setPlace(which, place, true);
+      return place;
+    }
+
+    async function plan() {
+      if (!state.ready) {
+        setStatus("請先載入 Google Maps API Key。", "err");
+        return;
+      }
+      const configs = getTypeConfig();
+      if (!configs.length) {
+        setStatus("請至少啟用一種站點類型。", "err");
+        return;
+      }
+
+      planBtn.disabled = true;
+      setMapsButtons(false);
+      setStatus("用 Google Geocoder 解析地址…");
+      try {
+        const [start, end] = await Promise.all([
+          resolveEndpoint("start"),
+          resolveEndpoint("end"),
+        ]);
+
+        const mode = state.mode;
+        setStatus(mode === "scooter"
+          ? "呼叫 Google Directions（避開國道／收費快速道路）…"
+          : "呼叫 Google Directions（汽車）…");
+
+        let route = await fetchGoogleRoute(start, end, mode);
+        const metrics = buildRouteMetrics(route.latlngs);
+        const corridor = +$("corridor").value || 2.5;
+
+        setStatus(`沿 Google 路線查詢站點（廊道 ${corridor} km）…`);
+        const { stations, mode: dataMode } = await fetchStationsAlongRoute(route.latlngs, metrics.cum, corridor);
+        const projected = projectStations(stations, route.latlngs, metrics.cum)
+          .filter((s) => s.offRouteKm <= corridor + (dataMode === "demo" ? 1.5 : 0.5));
+
+        clearOverlayMarkers();
+        for (const s of projected) {
+          state.candidateMarkers.push(new google.maps.Marker({
+            map: state.map,
+            position: { lat: s.lat, lng: s.lon },
+            clickable: false,
+            icon: {
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 3,
+              fillColor: typeColor(s.type),
+              fillOpacity: 0.35,
+              strokeWeight: 0,
+            },
+          }));
+        }
+
+        let stops = [];
+        for (const cfg of configs) {
+          stops = stops.concat(
+            pickIntervalStops(projected, cfg.type, cfg.interval, corridor + (dataMode === "demo" ? 1.5 : 0), route.distanceKm)
+          );
+        }
+        stops.sort((a, b) => a.alongKm - b.alongKm);
+
+        const deduped = [];
+        for (const s of stops) {
+          const near = deduped.find((d) => haversineKm([d.lat, d.lon], [s.lat, s.lon]) < 0.15);
+          if (!near) deduped.push(s);
+        }
+
+        // 第二趟：把停靠點餵回 Google Directions，取得含 waypoint 的真實路線
+        if (deduped.length) {
+          setStatus(`以 ${deduped.length} 個停靠點再向 Google Directions 精算…`);
+          try {
+            route = await fetchGoogleRoute(start, end, mode, deduped.slice(0, 23));
+            const m2 = buildRouteMetrics(route.latlngs);
+            for (const s of deduped) {
+              let best = { dist: Infinity, along: 0 };
+              const step = Math.max(1, Math.floor(route.latlngs.length / 800));
+              for (let i = 0; i < route.latlngs.length; i += step) {
+                const d = haversineKm([s.lat, s.lon], route.latlngs[i]);
+                if (d < best.dist) best = { dist: d, along: m2.cum[i] };
+              }
+              s.alongKm = best.along;
+              s.offRouteKm = best.dist;
+            }
+            deduped.sort((a, b) => a.alongKm - b.alongKm);
+          } catch (err) {
+            console.warn("waypoint refine failed", err);
+          }
+        }
+
+        renderResult({ start, end, route, stops: deduped, mode, dataMode });
+
+        const counts = configs.map((c) => {
+          const n = deduped.filter((s) => s.type === c.type).length;
+          return `${typeLabel(c.type)} ${n} 站（目標間隔 ${c.interval} km）`;
+        }).join("；");
+        const hwyNote = mode === "scooter"
+          ? "已要求 Google 避開 highways／tolls。"
+          : "允許高速公路。";
+        const srcNote = dataMode === "osm"
+          ? "站點：OSM 即時。"
+          : "站點：沿線示範。";
+        setStatus(
+          `完成（Google Maps／${mode === "scooter" ? "機車" : "汽車"}）：${formatKm(route.distanceKm)}／${formatDuration(route.durationSec)}。停靠 ${deduped.length}。${counts} ${hwyNote}${srcNote}`,
+          "ok"
+        );
+      } catch (err) {
+        console.error(err);
+        setStatus(err.message || String(err), "err");
+      } finally {
+        planBtn.disabled = false;
+      }
+    }
+
+    function clearResult() {
+      $("resultCard").hidden = true;
+      $("gmapsUrl").classList.remove("show");
+      clearOverlayMarkers();
+      if (state.directionsRenderer) state.directionsRenderer.set("directions", null);
+      state.lastPlan = null;
+      setMapsButtons(false);
+      setStatus("已清除結果。");
+    }
+
+    async function bootstrapMaps() {
+      const key = getApiKey();
+      if (!key) {
+        setStatus("請貼上 Google Maps API Key。", "err");
+        return;
+      }
+      $("loadMapsBtn").disabled = true;
+      setStatus("載入 Google Maps SDK…");
+      try {
+        saveApiKey(key);
+        await loadGoogleMaps(key);
+        if (!(google.maps && google.maps.places)) {
+          throw new Error("Places 函式庫未載入，請確認金鑰已啟用 Places API。");
+        }
+        initMap();
+      } catch (err) {
+        console.error(err);
+        enableUi(false);
+        setStatus(err.message || String(err), "err");
+      } finally {
+        $("loadMapsBtn").disabled = false;
+      }
+    }
+
+    // events
+    $("loadMapsBtn").addEventListener("click", bootstrapMaps);
+    $("apiKey").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") bootstrapMaps();
+    });
+    $("modeCar").addEventListener("click", () => setMode("car"));
+    $("modeScooter").addEventListener("click", () => setMode("scooter"));
+    $("planBtn").addEventListener("click", plan);
+    $("clearBtn").addEventListener("click", clearResult);
+    $("openMapsBtn").addEventListener("click", () => {
+      if (!state.lastPlan) return;
+      window.open(state.lastPlan.urls.openUrl, "_blank", "noopener");
+    });
+    $("copyMapsBtn").addEventListener("click", async () => {
+      if (!state.lastPlan) return;
+      const url = state.lastPlan.urls.copyUrl;
+      try {
+        await navigator.clipboard.writeText(url);
+        setStatus("已複製 Google Maps 連結。", "ok");
+      } catch {
+        $("gmapsUrl").classList.add("show");
+        setStatus("無法自動複製，請手動複製下方連結。", "err");
+      }
+    });
+    $("pinStartBtn").addEventListener("click", () => {
+      state.pinMode = "start";
+      $("mapHint").textContent = "在地圖上點一下設定起點";
+      $("mapHint").classList.add("show");
+    });
+    $("pinEndBtn").addEventListener("click", () => {
+      state.pinMode = "end";
+      $("mapHint").textContent = "在地圖上點一下設定終點";
+      $("mapHint").classList.add("show");
+    });
+    document.querySelectorAll("[data-preset]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!state.ready) return;
+        const preset = PRESETS[btn.dataset.preset];
+        if (!preset) return;
+        setStatus("載入預設路線地址…");
+        try {
+          const [start, end] = await Promise.all([
+            geocodeQuery(preset.start.query),
+            geocodeQuery(preset.end.query),
+          ]);
+          setPlace("start", { ...start, name: preset.start.name }, true);
+          setPlace("end", { ...end, name: preset.end.name }, true);
+          const bounds = new google.maps.LatLngBounds();
+          bounds.extend({ lat: start.lat, lng: start.lon });
+          bounds.extend({ lat: end.lat, lng: end.lon });
+          state.map.fitBounds(bounds, 64);
+          setStatus(`已設定 ${preset.start.name} → ${preset.end.name}`);
+        } catch (err) {
+          setStatus(err.message || String(err), "err");
+        }
+      });
+    });
+
+    // boot: restore key if present
+    const saved = localStorage.getItem(STORAGE_KEY) || new URLSearchParams(location.search).get("key") || "";
+    if (saved) {
+      $("apiKey").value = saved;
+      bootstrapMaps();
+    } else {
+      setStatus("請先載入 Google Maps API Key。");
+    }
+  </script>
+</body>
+</html>
