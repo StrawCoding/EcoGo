@@ -323,17 +323,6 @@
       font-size: 0.66rem;
       vertical-align: middle;
     }
-    .geo-help {
-      margin-top: 8px;
-      padding: 10px;
-      border-radius: 10px;
-      border: 1px dashed color-mix(in srgb, var(--ionex) 40%, var(--line));
-      background: color-mix(in srgb, var(--ionex) 8%, #121b17);
-      color: var(--muted);
-      font-size: 0.74rem;
-      line-height: 1.45;
-    }
-    .geo-help strong { color: var(--text); font-weight: 600; }
     .map-wrap { position: relative; min-height: 280px; }
     #map { height: 100%; width: 100%; background: #0a100e; }
     .map-hint {
@@ -440,11 +429,6 @@
         <div class="pin-row">
           <button type="button" class="btn-ghost" id="pinStartBtn">地圖點選起點</button>
           <button type="button" class="btn-ghost" id="pinEndBtn">地圖點選終點</button>
-        </div>
-        <div class="geo-help">
-          <strong>地址解析方案（免費）</strong><br />
-          1) 常用地標別名　2) 座標貼上（緯度,經度）　3) Photon＋Nominatim 並行　4) 台灣門牌正規化（台/臺、路名＋門牌空白）＋結構化查詢　5) 失敗可地圖點選。<br />
-          開源 OSM 對完整門牌覆蓋不全時，請改用地名、路名，或直接點地圖。
         </div>
       </section>
 
