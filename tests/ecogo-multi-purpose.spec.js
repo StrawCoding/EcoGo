@@ -93,6 +93,20 @@ async function mockEcoGoNetwork(page) {
   });
 }
 
+test("URL 參數可預填起點、停靠點與終點", async ({ page }) => {
+  await mockEcoGoNetwork(page);
+  const q = new URLSearchParams({
+    start: "25.0000,121.0000",
+    end: "25.2000,121.2000",
+    via: "25.1000,121.1000",
+  });
+  await page.goto(`/?${q.toString()}`);
+
+  await expect(page.locator("#start")).toHaveValue("25.0000,121.0000");
+  await expect(page.locator("#end")).toHaveValue("25.2000,121.2000");
+  await expect(page.locator("#via-0")).toHaveValue("25.1000,121.1000");
+});
+
 test("A→C 直達可規劃並安排站點", async ({ page }) => {
   await mockEcoGoNetwork(page);
   await page.goto("/");

@@ -712,6 +712,68 @@
       } catch (_) {}
     }
 
+    function parseUrlRouteParams() {
+      const params = new URLSearchParams(window.location.search);
+      const pick = (...keys) => {
+        for (const k of keys) {
+          const v = params.get(k);
+          if (v != null && String(v).trim()) return String(v).trim();
+        }
+        return "";
+      };
+
+      const start = pick("start", "from", "origin");
+      const end = pick("end", "to", "destination");
+
+      const viaPoints = [];
+      const multiVia = [
+        ...params.getAll("via"),
+        ...params.getAll("waypoint"),
+        ...params.getAll("stop"),
+      ]
+        .map((v) => String(v).trim())
+        .filter(Boolean);
+      if (multiVia.length) {
+        viaPoints.push(...multiVia);
+      } else {
+        const bundled = pick("waypoints", "vias", "stops");
+        if (bundled) {
+          bundled.split(/[|,;]/).forEach((v) => {
+            const s = v.trim();
+            if (s) viaPoints.push(s);
+          });
+        }
+      }
+
+      const modeRaw = pick("mode").toLowerCase();
+      const mode =
+        modeRaw === "scooter" || modeRaw === "motor_scooter"
+          ? "scooter"
+          : modeRaw === "car" || modeRaw === "auto"
+            ? "car"
+            : "";
+      const autoplan = ["1", "true", "yes"].includes(pick("plan", "autoplan").toLowerCase());
+      const hasRoute = !!(start || end || viaPoints.length);
+      return { start, end, viaPoints, mode, autoplan, hasRoute };
+    }
+
+    function applyUrlRouteParams() {
+      const parsed = parseUrlRouteParams();
+      if (!parsed.hasRoute && !parsed.mode) return parsed;
+      if (parsed.start) $("start").value = parsed.start;
+      if (parsed.end) $("end").value = parsed.end;
+      if (parsed.hasRoute) {
+        $("viaPointsList").innerHTML = "";
+        parsed.viaPoints.forEach((v) => addViaPointField(v));
+      }
+      if (parsed.mode) setMode(parsed.mode, true);
+      if (parsed.hasRoute) saveLastRouteInputs();
+      if (parsed.hasRoute) {
+        setStatus("已從網址預填路線。", "ok");
+      }
+      return parsed;
+    }
+
     function getViaPointInputs() {
       return [...document.querySelectorAll(".via-input")];
     }
@@ -2706,9 +2768,13 @@ out center 400;
 
     initMap();
     wireUi();
-    restoreLastRouteInputs();
-    setMode(restoreLastMode(), false);
+    const urlRoute = applyUrlRouteParams();
+    if (!urlRoute.hasRoute) restoreLastRouteInputs();
+    if (!urlRoute.mode) setMode(restoreLastMode(), false);
     restoreLastStationPrefs();
+    if (urlRoute.autoplan && (urlRoute.start || urlRoute.end)) {
+      plan();
+    }
   </script>
 </body>
 </html>
